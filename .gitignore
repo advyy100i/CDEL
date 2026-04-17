@@ -1,0 +1,6 @@
+.venv/
+__pycache__/
+*.pyc
+tests/dummy_project/build-*/
+tests/artifacts/
+.history/

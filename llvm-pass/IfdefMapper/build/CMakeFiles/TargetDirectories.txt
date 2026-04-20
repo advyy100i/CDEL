@@ -1,0 +1,9 @@
+/Users/user/Documents/Sem VI Notes/CD(CS363IA)/EL/CDEL/llvm-pass/IfdefMapper/build/CMakeFiles/intrinsics_gen.dir
+/Users/user/Documents/Sem VI Notes/CD(CS363IA)/EL/CDEL/llvm-pass/IfdefMapper/build/CMakeFiles/vt_gen.dir
+/Users/user/Documents/Sem VI Notes/CD(CS363IA)/EL/CDEL/llvm-pass/IfdefMapper/build/CMakeFiles/omp_gen.dir
+/Users/user/Documents/Sem VI Notes/CD(CS363IA)/EL/CDEL/llvm-pass/IfdefMapper/build/CMakeFiles/acc_gen.dir
+/Users/user/Documents/Sem VI Notes/CD(CS363IA)/EL/CDEL/llvm-pass/IfdefMapper/build/CMakeFiles/target_parser_gen.dir
+/Users/user/Documents/Sem VI Notes/CD(CS363IA)/EL/CDEL/llvm-pass/IfdefMapper/build/CMakeFiles/clang-tablegen-targets.dir
+/Users/user/Documents/Sem VI Notes/CD(CS363IA)/EL/CDEL/llvm-pass/IfdefMapper/build/CMakeFiles/IfdefMapper.dir
+/Users/user/Documents/Sem VI Notes/CD(CS363IA)/EL/CDEL/llvm-pass/IfdefMapper/build/CMakeFiles/edit_cache.dir
+/Users/user/Documents/Sem VI Notes/CD(CS363IA)/EL/CDEL/llvm-pass/IfdefMapper/build/CMakeFiles/rebuild_cache.dir

@@ -4,3 +4,4 @@ __pycache__/
 tests/dummy_project/build-*/
 tests/artifacts/
 .history/
+CLAUDE.md

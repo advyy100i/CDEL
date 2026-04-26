@@ -1,754 +1,1869 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Dead Feature Detector</title>
-  <script src="https://cdn.tailwindcss.com"></script>
-  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>Dead Feature Detector</title>
+<script src="https://d3js.org/d3.v7.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=Figtree:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet"/>
 
-  <style>
-    * { font-family: 'Inter', sans-serif; }
-    code, pre, .mono { font-family: 'JetBrains Mono', monospace; }
+<style>
+/* ── Reset & Variables ─────────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+:root {
+  --bg:       #04080f;
+  --s1:       #080f1a;
+  --s2:       #0c1828;
+  --s3:       #101f33;
+  --bdr:      rgba(0,212,255,.07);
+  --bdr2:     rgba(0,212,255,.18);
+  --cyan:     #00d4ff;
+  --cyan-lo:  rgba(0,212,255,.10);
+  --cyan-mid: rgba(0,212,255,.22);
+  --green:    #00e5a0;
+  --green-lo: rgba(0,229,160,.10);
+  --amber:    #ffb347;
+  --amber-lo: rgba(255,179,71,.10);
+  --red:      #ff4d6d;
+  --red-lo:   rgba(255,77,109,.10);
+  --violet:   #a78bfa;
+  --violet-lo:rgba(167,139,250,.10);
+  --t1:       #e8f4ff;
+  --t2:       #6b90a8;
+  --t3:       #2e4a63;
+  --mono:     'JetBrains Mono', monospace;
+  --sans:     'Figtree', sans-serif;
+  --display:  'Syne', sans-serif;
+}
 
-    body { background: #020617; }
+html, body {
+  width: 100%; height: 100%;
+  background: var(--bg);
+  color: var(--t1);
+  font-family: var(--sans);
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+}
 
-    .glass {
-      background: rgba(15,23,42,0.8);
-      backdrop-filter: blur(12px);
-      border: 1px solid rgba(148,163,184,0.1);
-    }
+/* ── Background grid ───────────────────────────────────────────────────────── */
+body::before {
+  content: '';
+  position: fixed; inset: 0; z-index: 0; pointer-events: none;
+  background-image:
+    linear-gradient(var(--bdr) 1px, transparent 1px),
+    linear-gradient(90deg, var(--bdr) 1px, transparent 1px);
+  background-size: 44px 44px;
+}
 
-    /* Animated gradient header */
-    .hero-bg {
-      background: linear-gradient(135deg, #1e1b4b 0%, #312e81 40%, #4c1d95 70%, #1e1b4b 100%);
-      background-size: 400% 400%;
-      animation: gradientShift 12s ease infinite;
-    }
-    @keyframes gradientShift {
-      0%   { background-position: 0% 50%; }
-      50%  { background-position: 100% 50%; }
-      100% { background-position: 0% 50%; }
-    }
+/* ── Deck container ────────────────────────────────────────────────────────── */
+#deck {
+  position: fixed; inset: 0 0 56px 0;
+  overflow: hidden; z-index: 1;
+}
 
-    /* Phase card status borders */
-    .phase-idle    { border-left: 4px solid #334155; }
-    .phase-running { border-left: 4px solid #818cf8; animation: pulseBorder 1.5s ease-in-out infinite; }
-    .phase-done    { border-left: 4px solid #34d399; }
-    .phase-error   { border-left: 4px solid #f87171; }
+/* ── Slides ────────────────────────────────────────────────────────────────── */
+.slide {
+  position: absolute; inset: 0;
+  display: flex; flex-direction: column;
+  overflow-y: auto; overflow-x: hidden;
+  transform: translateX(100%);
+  transition: transform .42s cubic-bezier(.76,.0,.24,1.0);
+  will-change: transform;
+  scrollbar-width: thin; scrollbar-color: var(--s3) transparent;
+}
+.slide::-webkit-scrollbar { width: 4px; }
+.slide::-webkit-scrollbar-thumb { background: var(--s3); border-radius: 2px; }
+.slide.is-active  { transform: translateX(0); }
+.slide.is-left    { transform: translateX(-100%); }
 
-    @keyframes pulseBorder {
-      0%, 100% { border-left-color: #818cf8; }
-      50%       { border-left-color: #c4b5fd; }
-    }
+/* ── Ghost phase number watermark ─────────────────────────────────────────── */
+/* NOTE: .slide-phase must NOT override position from .slide (both are 0-1-0
+   specificity; whichever comes later wins). Keep position:absolute from .slide. */
+.slide-phase::after {
+  content: attr(data-num);
+  position: absolute; bottom: 56px; right: -0.02em;
+  font-family: var(--display); font-weight: 800; font-size: 38vw; line-height: 1;
+  color: rgba(255,255,255,.018); pointer-events: none; user-select: none;
+  z-index: 0;
+}
+/* Utility to suppress transitions during programmatic repositioning */
+.no-anim, .no-anim * { transition: none !important; }
 
-    /* Spinner */
-    .spinner {
-      width: 20px; height: 20px;
-      border: 3px solid rgba(129,140,248,0.3);
-      border-top-color: #818cf8;
-      border-radius: 50%;
-      animation: spin 0.8s linear infinite;
-      display: inline-block;
-    }
-    @keyframes spin { to { transform: rotate(360deg); } }
+/* ── Slide inner layout ────────────────────────────────────────────────────── */
+.slide-inner {
+  position: relative; z-index: 1;
+  flex: 1; display: flex; flex-direction: column;
+  padding: 40px 60px 28px;
+  max-width: 1200px; margin: 0 auto; width: 100%;
+}
+@media (max-width: 700px) {
+  .slide-inner { padding: 28px 20px 20px; }
+}
 
-    /* Log terminal */
-    .log-terminal {
-      background: #020617;
-      border: 1px solid #1e293b;
-      border-radius: 8px;
-      font-family: 'JetBrains Mono', monospace;
-      font-size: 12px;
-      line-height: 1.6;
-      color: #94a3b8;
-      padding: 12px;
-      max-height: 280px;
-      overflow-y: auto;
-      scroll-behavior: smooth;
-    }
-    .log-phase1 { color: #818cf8; }
-    .log-phase2 { color: #34d399; }
-    .log-phase3 { color: #fbbf24; }
-    .log-phase4 { color: #f472b6; }
-    .log-setup  { color: #94a3b8; }
-    .log-error  { color: #f87171; }
+/* ── Slide label ───────────────────────────────────────────────────────────── */
+.slide-label {
+  font-family: var(--mono); font-size: .7rem; font-weight: 500;
+  letter-spacing: .18em; text-transform: uppercase;
+  color: var(--accent, var(--cyan));
+  display: flex; align-items: center; gap: 10px; margin-bottom: 14px;
+}
+.slide-label::before {
+  content: ''; display: block;
+  width: 28px; height: 2px; background: var(--accent, var(--cyan));
+}
 
-    /* Markdown report rendering */
-    #report-body h1 { font-size: 1.5rem; font-weight: 700; color: #f1f5f9; margin: 1.2rem 0 0.5rem; }
-    #report-body h2 { font-size: 1.15rem; font-weight: 600; color: #c7d2fe; margin: 1rem 0 0.4rem; border-bottom: 1px solid #1e293b; padding-bottom: 4px; }
-    #report-body h3 { font-size: 1rem; font-weight: 600; color: #a5b4fc; margin: 0.8rem 0 0.3rem; }
-    #report-body h4 { font-size: 0.9rem; font-weight: 600; color: #818cf8; margin: 0.6rem 0 0.2rem; }
-    #report-body p  { color: #94a3b8; margin: 0.4rem 0; line-height: 1.6; }
-    #report-body ul { color: #94a3b8; padding-left: 1.5rem; margin: 0.4rem 0; }
-    #report-body li { margin: 0.2rem 0; }
-    #report-body code { background: #1e293b; color: #c4b5fd; padding: 2px 6px; border-radius: 4px; font-family: 'JetBrains Mono', monospace; font-size: 0.85em; }
-    #report-body table { width: 100%; border-collapse: collapse; margin: 0.8rem 0; font-size: 0.85rem; }
-    #report-body th { background: #1e293b; color: #818cf8; padding: 8px 12px; text-align: left; font-weight: 600; border: 1px solid #334155; }
-    #report-body td { padding: 7px 12px; border: 1px solid #1e293b; color: #cbd5e1; }
-    #report-body tr:nth-child(even) td { background: rgba(30,41,59,0.3); }
-    #report-body strong { color: #f1f5f9; }
-    #report-body em { color: #a5b4fc; }
-    #report-body hr { border-color: #1e293b; margin: 1rem 0; }
-    #report-body a  { color: #818cf8; }
+/* ── Slide title & description ────────────────────────────────────────────── */
+.slide-title {
+  font-family: var(--display); font-size: clamp(1.8rem, 4vw, 3.2rem);
+  font-weight: 800; line-height: 1.05; color: var(--t1);
+  margin-bottom: 10px;
+}
+.slide-title span { color: var(--accent, var(--cyan)); }
 
-    /* Confidence badges */
-    .badge-high   { background: rgba(248,113,113,0.15); color: #f87171; border: 1px solid rgba(248,113,113,0.3); }
-    .badge-medium { background: rgba(251,191,36,0.15);  color: #fbbf24; border: 1px solid rgba(251,191,36,0.3);  }
+.slide-desc {
+  font-size: .9rem; color: var(--t2); line-height: 1.7;
+  max-width: 560px; margin-bottom: 20px;
+}
 
-    /* Tooltip */
-    .tooltip-container { position: relative; cursor: help; }
-    .tooltip-text {
-      visibility: hidden; opacity: 0;
-      background: #1e293b; color: #cbd5e1;
-      border: 1px solid #334155;
-      padding: 8px 12px; border-radius: 6px;
-      font-size: 0.78rem; line-height: 1.5;
-      position: absolute; z-index: 50;
-      bottom: calc(100% + 8px); left: 50%;
-      transform: translateX(-50%);
-      width: 240px;
-      transition: opacity 0.2s;
-      pointer-events: none;
-    }
-    .tooltip-container:hover .tooltip-text { visibility: visible; opacity: 1; }
+/* ── Content area ─────────────────────────────────────────────────────────── */
+.slide-content { flex: 1; display: flex; flex-direction: column; gap: 14px; }
 
-    /* Phase number badge */
-    .phase-num {
-      width: 32px; height: 32px;
-      border-radius: 50%;
-      display: flex; align-items: center; justify-content: center;
-      font-weight: 700; font-size: 0.9rem;
-      flex-shrink: 0;
-    }
+/* ── Bottom nav bar ────────────────────────────────────────────────────────── */
+#nav-bar {
+  position: fixed; bottom: 0; left: 0; right: 0; height: 56px; z-index: 100;
+  background: rgba(4,8,15,.92); backdrop-filter: blur(18px);
+  border-top: 1px solid var(--bdr);
+  display: grid; grid-template-columns: 100px 1fr 100px;
+  align-items: center; padding: 0 24px;
+}
+.nav-btn {
+  background: none; border: 1px solid transparent; cursor: pointer;
+  font-family: var(--mono); font-size: .75rem;
+  color: var(--t2); transition: all .2s;
+  display: flex; align-items: center; gap: 6px;
+  padding: 6px 12px; border-radius: 7px;
+}
+.nav-btn:hover:not(:disabled) { color: var(--cyan); border-color: var(--bdr2); background: var(--cyan-lo); }
+.nav-btn:disabled { opacity: .2; cursor: not-allowed; }
+.nav-btn-prev { justify-content: flex-start; }
+.nav-btn-next { justify-content: flex-end; }
+#nav-dots {
+  display: flex; justify-content: center; gap: 8px; align-items: center;
+}
+.dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--t3); cursor: pointer;
+  transition: all .25s; border: none;
+}
+.dot.active { background: var(--cyan); transform: scale(1.4); }
+.dot:hover:not(.active) { background: var(--t2); }
+#slide-counter {
+  position: fixed; top: 18px; right: 22px; z-index: 200;
+  font-family: var(--mono); font-size: .7rem; color: var(--t3);
+  letter-spacing: .1em;
+}
 
-    /* Results accordion */
-    .accordion-content { display: none; }
-    .accordion-content.open { display: block; }
+/* ── Phase progress (setup slide) ─────────────────────────────────────────── */
+.phase-track {
+  display: flex; align-items: center; gap: 12px; padding: 10px 0;
+}
+.phase-track-label {
+  font-family: var(--mono); font-size: .7rem; color: var(--t2);
+  min-width: 90px;
+}
+.phase-track-bar {
+  flex: 1; height: 3px; background: var(--s3); border-radius: 99px; overflow: hidden;
+}
+.phase-track-fill {
+  height: 100%; border-radius: 99px; width: 0%;
+  transition: width .6s ease, background-color .4s;
+  background: var(--t3);
+}
+.phase-track-fill.running { background: var(--cyan); width: 55%; animation: shimmer 1.4s ease-in-out infinite; }
+.phase-track-fill.done    { background: var(--green); width: 100%; }
+@keyframes shimmer {
+  0%, 100% { opacity: .7; } 50% { opacity: 1; }
+}
+.phase-track-status {
+  font-family: var(--mono); font-size: .65rem; min-width: 60px;
+  color: var(--t3);
+}
+.phase-track-status.running { color: var(--cyan); }
+.phase-track-status.done    { color: var(--green); }
 
-    /* Progress bar */
-    .progress-bar {
-      height: 4px; background: #1e293b; border-radius: 2px; overflow: hidden;
-    }
-    .progress-fill {
-      height: 100%; border-radius: 2px;
-      background: linear-gradient(90deg, #818cf8, #c4b5fd);
-      transition: width 0.5s ease;
-    }
+/* ── Log terminal ─────────────────────────────────────────────────────────── */
+.log-wrap {
+  background: var(--s1); border: 1px solid var(--bdr);
+  border-radius: 10px; overflow: hidden;
+}
+.log-header {
+  padding: 8px 14px; border-bottom: 1px solid var(--bdr);
+  display: flex; align-items: center; justify-content: space-between;
+  cursor: pointer; user-select: none;
+}
+.log-header span { font-family: var(--mono); font-size: .7rem; color: var(--t2); }
+.log-body { padding: 10px 14px; max-height: 140px; overflow-y: auto; }
+.log-body::-webkit-scrollbar { width: 3px; }
+.log-body::-webkit-scrollbar-thumb { background: var(--s3); }
+.log-line {
+  font-family: var(--mono); font-size: 11px; line-height: 1.8;
+  color: var(--t3);
+}
+.log-line.lp1 { color: var(--violet); }
+.log-line.lp2 { color: var(--green); }
+.log-line.lp3 { color: var(--amber); }
+.log-line.lp4 { color: var(--red); }
+.log-line.lerr { color: #ff6b6b; }
 
-    /* Glow on running card */
-    .phase-running {
-      box-shadow: 0 0 20px rgba(129,140,248,0.15);
-    }
+/* ── Input & button ────────────────────────────────────────────────────────── */
+.inp-row { display: flex; gap: 10px; }
+.inp {
+  flex: 1; background: var(--s2); border: 1px solid var(--bdr2);
+  border-radius: 10px; padding: 13px 16px;
+  font-family: var(--mono); font-size: .83rem; color: var(--t1);
+  outline: none; transition: border-color .2s;
+}
+.inp::placeholder { color: var(--t3); }
+.inp:focus { border-color: var(--cyan); box-shadow: 0 0 0 3px rgba(0,212,255,.08); }
+.btn-primary {
+  background: var(--cyan); color: #04080f;
+  font-family: var(--display); font-weight: 700; font-size: .85rem;
+  border: none; border-radius: 10px; padding: 13px 22px;
+  cursor: pointer; white-space: nowrap; transition: all .2s;
+  letter-spacing: .02em;
+}
+.btn-primary:hover { background: #33deff; transform: translateY(-1px); box-shadow: 0 4px 20px rgba(0,212,255,.3); }
+.btn-primary:disabled { opacity: .35; cursor: not-allowed; transform: none; box-shadow: none; }
+.btn-ghost {
+  background: none; border: 1px solid var(--bdr2); color: var(--t2);
+  font-family: var(--sans); font-size: .82rem; border-radius: 8px;
+  padding: 7px 14px; cursor: pointer; transition: all .2s;
+}
+.btn-ghost:hover { border-color: var(--cyan); color: var(--cyan); }
 
-    /* Scroll to top button */
-    ::-webkit-scrollbar { width: 6px; }
-    ::-webkit-scrollbar-track { background: #0f172a; }
-    ::-webkit-scrollbar-thumb { background: #334155; border-radius: 3px; }
-  </style>
+/* ── Table ─────────────────────────────────────────────────────────────────── */
+.data-table { width: 100%; border-collapse: collapse; font-size: .83rem; }
+.data-table th {
+  text-align: left; padding: 10px 14px;
+  background: var(--s2); color: var(--t2);
+  font-family: var(--mono); font-size: .68rem; font-weight: 500;
+  letter-spacing: .08em; text-transform: uppercase;
+  border-bottom: 1px solid var(--bdr);
+}
+.data-table td {
+  padding: 11px 14px; border-bottom: 1px solid var(--bdr);
+  color: var(--t1); vertical-align: middle;
+}
+.data-table tr:last-child td { border-bottom: none; }
+.data-table tr:hover td { background: rgba(255,255,255,.02); }
+.tag {
+  display: inline-block; font-family: var(--mono); font-size: .68rem;
+  padding: 3px 8px; border-radius: 5px; margin: 2px 2px 2px 0;
+  background: var(--s3); color: var(--t2); border: 1px solid var(--bdr);
+}
+.tag.accent { background: var(--violet-lo); color: var(--violet); border-color: rgba(167,139,250,.2); }
+
+/* ── Source viewer ─────────────────────────────────────────────────────────── */
+.src-outer {
+  background: var(--s1); border: 1px solid var(--bdr);
+  border-radius: 10px; overflow: hidden; flex: 1;
+}
+.src-tabs-bar {
+  display: flex; gap: 2px; padding: 8px 8px 0;
+  border-bottom: 1px solid var(--bdr); background: var(--s2);
+}
+.src-tab {
+  font-family: var(--mono); font-size: .72rem; padding: 6px 14px;
+  border-radius: 7px 7px 0 0; cursor: pointer; color: var(--t3);
+  background: transparent; border: none; transition: all .2s;
+}
+.src-tab.active { background: var(--s1); color: var(--t1); }
+.src-code-wrap { max-height: 300px; overflow-y: auto; }
+.src-code-wrap::-webkit-scrollbar { width: 4px; }
+.src-code-wrap::-webkit-scrollbar-thumb { background: var(--s3); }
+.src-table-inner { font-family: var(--mono); font-size: 12px; line-height: 1.8; padding: 8px 0; }
+.src-line { display: flex; border-left: 3px solid transparent; transition: background .3s, border-color .3s; }
+.src-line:hover { background: rgba(255,255,255,.02); }
+.src-linenum { min-width: 44px; padding: 0 12px 0 8px; text-align: right; color: var(--t3); user-select: none; flex-shrink: 0; }
+.src-code-cell { flex: 1; padding: 0 16px 0 4px; white-space: pre; color: var(--t2); }
+.src-line.l-reach  { border-left-color: var(--green)!important; }
+.src-line.l-dead   { border-left-color: var(--red)!important; background: rgba(255,77,109,.05)!important; }
+.dead-lbl { font-size: 9px; padding: 1px 5px; border-radius: 3px; margin-left: 6px; vertical-align: middle; background: rgba(255,77,109,.2); color: var(--red); border: 1px solid rgba(255,77,109,.3); }
+.src-legend { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 8px; }
+.legend-item { display: flex; align-items: center; gap: 6px; font-size: .72rem; color: var(--t2); }
+.legend-swatch { width: 10px; height: 10px; border-radius: 2px; flex-shrink: 0; }
+/* hl */
+.hl-pp { color: #c084fc; } .hl-kw { color: #93c5fd; }
+.hl-str { color: #86efac; } .hl-num { color: var(--amber); }
+.hl-cmt { color: #2e4a63; font-style: italic; } .hl-type { color: #67e8f9; }
+
+/* ── Call graph ─────────────────────────────────────────────────────────────── */
+.cg-outer {
+  background: var(--s1); border: 1px solid var(--bdr);
+  border-radius: 10px; overflow: hidden; flex: 1;
+}
+.cg-toolbar {
+  padding: 10px 16px; border-bottom: 1px solid var(--bdr);
+  display: flex; align-items: center; justify-content: space-between;
+}
+.cg-toolbar-title { font-family: var(--mono); font-size: .72rem; color: var(--t2); }
+.cg-btn {
+  font-family: var(--mono); font-size: .72rem; padding: 6px 14px;
+  border-radius: 7px; cursor: pointer; transition: all .2s; border: none;
+}
+.cg-btn-bfs { background: var(--amber-lo); color: var(--amber); border: 1px solid rgba(255,179,71,.25); }
+.cg-btn-bfs:hover { background: rgba(255,179,71,.18); }
+.cg-btn-rst { background: var(--s3); color: var(--t2); margin-right: 6px; }
+.cg-btn-rst:hover { color: var(--t1); }
+#cg-svg { display: block; width: 100%; }
+.cg-link { fill: none; stroke: var(--s3); stroke-width: 1.5; transition: stroke .4s; }
+.cg-link.lit { stroke: var(--green); stroke-width: 2; }
+
+/* ── CG legend ─────────────────────────────────────────────────────────────── */
+.cg-legend { display: flex; flex-wrap: wrap; gap: 16px; padding: 10px 16px; border-top: 1px solid var(--bdr); }
+.cg-legend-item { display: flex; align-items: center; gap: 6px; font-size: .7rem; color: var(--t2); }
+.cg-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+
+/* ── Dead feature card ──────────────────────────────────────────────────────── */
+.dead-card {
+  border: 1px solid rgba(255,77,109,.2); border-radius: 12px; overflow: hidden;
+  background: rgba(255,77,109,.03);
+}
+.dead-card-header { padding: 14px 18px; display: flex; align-items: flex-start; gap: 14px; }
+.dead-card-body { border-top: 1px solid rgba(255,77,109,.1); }
+.dead-snippet-line { display: flex; gap: 10px; padding: 2px 14px; font-family: var(--mono); font-size: 11.5px; line-height: 1.8; }
+.dead-snippet-line.is-dead { background: rgba(255,77,109,.07); color: #fca5a5; }
+.dead-snippet-line.is-dir  { color: var(--t3); font-style: italic; }
+.dead-snippet-line.is-norm { color: var(--t2); }
+.dead-snippet-ln { min-width: 28px; text-align: right; color: var(--t3); user-select: none; }
+.conf-badge {
+  display: inline-block; font-family: var(--mono); font-size: .65rem; font-weight: 600;
+  padding: 3px 9px; border-radius: 99px;
+}
+.conf-HIGH   { background: rgba(255,77,109,.18); color: var(--red); border: 1px solid rgba(255,77,109,.3); }
+.conf-MEDIUM { background: var(--amber-lo); color: var(--amber); border: 1px solid rgba(255,179,71,.3); }
+
+/* ── Results stats ─────────────────────────────────────────────────────────── */
+.stat-row { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 24px; }
+.stat-box {
+  flex: 1; min-width: 110px; padding: 18px;
+  border-radius: 12px; background: var(--s2); border: 1px solid var(--bdr);
+  display: flex; flex-direction: column; gap: 4px;
+}
+.stat-num { font-family: var(--display); font-size: 2.4rem; font-weight: 800; line-height: 1; }
+.stat-label { font-size: .72rem; color: var(--t2); }
+
+/* ── Waiting overlay ───────────────────────────────────────────────────────── */
+.waiting-state {
+  flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 14px; color: var(--t3); text-align: center; padding: 40px;
+  min-height: 160px;
+}
+.waiting-state svg { animation: spin 1.4s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.waiting-state p { font-size: .82rem; line-height: 1.6; max-width: 300px; }
+
+/* ── Intro slide ───────────────────────────────────────────────────────────── */
+.intro-inner {
+  flex: 1; display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  text-align: center; padding: 40px 24px; gap: 22px;
+}
+.intro-skull {
+  font-size: 4.5rem; line-height: 1;
+  filter: drop-shadow(0 0 40px rgba(0,212,255,.4));
+  animation: floatSkull 4s ease-in-out infinite;
+}
+@keyframes floatSkull {
+  0%, 100% { transform: translateY(0); }
+  50%       { transform: translateY(-12px); }
+}
+.intro-title {
+  font-family: var(--display); font-weight: 800;
+  font-size: clamp(2.4rem, 8vw, 5rem); line-height: 1;
+  letter-spacing: -.02em; color: var(--t1);
+}
+.intro-title em { color: var(--cyan); font-style: normal; }
+.intro-sub {
+  font-size: 1rem; color: var(--t2); max-width: 420px; line-height: 1.7;
+}
+.intro-cta {
+  display: inline-flex; align-items: center; gap: 10px;
+  background: var(--cyan); color: #04080f;
+  font-family: var(--display); font-weight: 700; font-size: 1rem;
+  padding: 14px 28px; border-radius: 12px; border: none; cursor: pointer;
+  transition: all .25s; letter-spacing: .02em;
+}
+.intro-cta:hover { background: #33deff; transform: translateY(-2px); box-shadow: 0 8px 32px rgba(0,212,255,.35); }
+.intro-cta-arrow { font-size: 1.1rem; transition: transform .2s; }
+.intro-cta:hover .intro-cta-arrow { transform: translateX(4px); }
+.intro-meta { font-family: var(--mono); font-size: .67rem; color: var(--t3); letter-spacing: .1em; }
+
+/* ── Intro dead-code demo ──────────────────────────────────────────────────── */
+.dcd-wrap {
+  background: var(--s1); border: 1px solid var(--bdr2);
+  border-radius: 10px; overflow: hidden;
+  font-family: var(--mono); font-size: 12px;
+  max-width: 480px; width: 100%;
+}
+.dcd-header {
+  background: var(--s2); border-bottom: 1px solid var(--bdr);
+  padding: 7px 14px; display: flex; align-items: center;
+  justify-content: space-between;
+}
+.dcd-header-file { font-size: .7rem; color: var(--t2); }
+.dcd-header-badge {
+  font-size: .62rem; color: var(--red);
+  background: var(--red-lo); padding: 2px 8px; border-radius: 99px;
+  border: 1px solid rgba(255,77,109,.2);
+}
+.dcd-line {
+  display: flex; align-items: baseline; line-height: 1.9;
+}
+.dcd-ln { min-width: 36px; padding: 0 10px; text-align: right; color: var(--t3); flex-shrink: 0; }
+.dcd-code { flex: 1; padding: 0 14px 0 4px; white-space: pre; color: var(--t2); }
+.dcd-line.dead { background: rgba(255,77,109,.07); border-left: 3px solid var(--red); }
+.dcd-line.dead .dcd-code { color: #fca5a5; }
+.dcd-line.live { background: rgba(0,229,160,.05); border-left: 3px solid var(--green); }
+.dcd-line.live .dcd-code { color: var(--t1); }
+.dcd-line.dim  { border-left: 3px solid transparent; }
+.dcd-marker {
+  font-size: .6rem; padding: 1px 6px; border-radius: 3px;
+  white-space: nowrap; margin-left: 6px; flex-shrink: 0;
+}
+.dcd-marker.bad { color: var(--red); background: var(--red-lo); border: 1px solid rgba(255,77,109,.25); }
+.dcd-marker.ok  { color: var(--green); background: var(--green-lo); border: 1px solid rgba(0,229,160,.25); }
+
+/* ── Pipeline overview strip (Setup slide) ─────────────────────────────────── */
+.pipeline-strip {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
+  margin-bottom: 18px;
+}
+@media (max-width: 760px) {
+  .pipeline-strip { grid-template-columns: repeat(2, 1fr); }
+}
+.ps-phase {
+  background: var(--s1); border: 1px solid var(--bdr);
+  border-radius: 10px; padding: 14px 14px 10px;
+  display: flex; flex-direction: column; gap: 5px;
+  position: relative; overflow: hidden;
+}
+.ps-phase::after {
+  content: attr(data-n);
+  position: absolute; bottom: -10px; right: 2px;
+  font-family: var(--display); font-weight: 800; font-size: 4rem;
+  color: rgba(255,255,255,.04); line-height: 1; pointer-events: none;
+}
+.ps-phase-num {
+  font-family: var(--mono); font-size: .6rem; color: var(--accent, var(--cyan));
+  letter-spacing: .12em; text-transform: uppercase;
+}
+.ps-phase-name {
+  font-family: var(--display); font-weight: 700; font-size: .82rem; color: var(--t1);
+}
+.ps-phase-desc {
+  font-size: .73rem; color: var(--t2); line-height: 1.45;
+}
+.ps-phase-file {
+  font-family: var(--mono); font-size: .6rem;
+  color: var(--accent, var(--cyan));
+  padding: 2px 7px; background: var(--cyan-lo);
+  border-radius: 4px; align-self: flex-start; margin-top: 3px;
+  border: 1px solid rgba(0,212,255,.12);
+}
+
+/* ── Explain grid (phase slides) ────────────────────────────────────────────── */
+.explain-grid {
+  display: grid;
+  grid-template-columns: 310px 1fr;
+  gap: 18px;
+  flex: 1;
+  align-items: start;
+}
+@media (max-width: 860px) {
+  .explain-grid { grid-template-columns: 1fr; }
+}
+.explain-panel {
+  display: flex; flex-direction: column; gap: 10px;
+  position: sticky; top: 0;
+}
+.concept-card {
+  background: var(--s1); border: 1px solid var(--bdr);
+  border-radius: 10px; padding: 13px 15px;
+  border-left: 3px solid var(--accent, var(--cyan));
+}
+.concept-card p {
+  font-size: .81rem; line-height: 1.8; color: var(--t2); margin: 0;
+}
+.concept-card strong { color: var(--t1); }
+.concept-card code {
+  font-family: var(--mono); font-size: .8em;
+  background: var(--s3); color: var(--violet);
+  padding: 1px 5px; border-radius: 3px;
+}
+.steps-lbl {
+  font-family: var(--mono); font-size: .6rem; text-transform: uppercase;
+  letter-spacing: .15em; color: var(--t3);
+}
+.steps-list { display: flex; flex-direction: column; gap: 5px; }
+.step-item {
+  display: flex; gap: 9px; align-items: flex-start;
+  padding: 8px 11px; background: var(--s1); border: 1px solid var(--bdr);
+  border-radius: 8px;
+}
+.step-n {
+  font-family: var(--mono); font-size: .6rem; font-weight: 700;
+  width: 20px; height: 20px; border-radius: 50%;
+  background: var(--accent-lo, var(--cyan-lo));
+  color: var(--accent, var(--cyan));
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0; margin-top: 1px;
+}
+.step-txt {
+  font-size: .77rem; line-height: 1.55; color: var(--t2);
+}
+.step-txt code {
+  font-family: var(--mono); font-size: .82em;
+  background: var(--s3); color: var(--violet);
+  padding: 1px 4px; border-radius: 3px;
+}
+.step-txt strong { color: var(--t1); font-weight: 600; }
+.tech-callout {
+  font-size: .75rem; line-height: 1.7; color: var(--t3);
+  padding: 9px 13px;
+  border-left: 2px solid var(--accent, var(--cyan));
+  background: rgba(0,0,0,.25); border-radius: 0 6px 6px 0;
+}
+.tech-callout strong { color: var(--t2); font-weight: 600; }
+.tech-callout code {
+  font-family: var(--mono); font-size: .82em;
+  color: var(--accent, var(--cyan));
+}
+.artifact-badge {
+  display: inline-flex; align-items: center; gap: 7px;
+  font-family: var(--mono); font-size: .67rem;
+  color: var(--t2); background: var(--s2);
+  border: 1px solid var(--bdr2); border-radius: 99px;
+  padding: 5px 12px; align-self: flex-start;
+}
+.artifact-dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--accent, var(--cyan)); flex-shrink: 0;
+}
+.data-panel { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+
+/* ── Confidence legend (Phase 04) ───────────────────────────────────────────── */
+.conf-legend { display: flex; gap: 10px; flex-wrap: wrap; }
+.conf-legend-card {
+  flex: 1; min-width: 120px; padding: 11px 13px;
+  border-radius: 8px; background: var(--s1); border: 1px solid var(--bdr);
+}
+.conf-legend-card p { font-size: .75rem; color: var(--t2); line-height: 1.5; margin-top: 5px; }
+
+/* ── Results interpretation ──────────────────────────────────────────────────── */
+.interp-strip {
+  display: grid; grid-template-columns: 1fr 1fr 1fr;
+  gap: 10px; margin-bottom: 18px;
+}
+@media (max-width: 640px) { .interp-strip { grid-template-columns: 1fr; } }
+.interp-card {
+  padding: 13px 15px; border-radius: 10px;
+  border: 1px solid var(--bdr); background: var(--s1);
+}
+.interp-card p { font-size: .77rem; line-height: 1.65; color: var(--t2); margin-top: 6px; }
+.interp-label {
+  font-family: var(--mono); font-size: .62rem; font-weight: 700;
+  letter-spacing: .1em; text-transform: uppercase;
+}
+
+/* ── Misc utilities ────────────────────────────────────────────────────────── */
+.glass { background: var(--s2); border: 1px solid var(--bdr); border-radius: 12px; }
+.mono  { font-family: var(--mono); }
+.fade-in { animation: fadeUp .4s ease; }
+@keyframes fadeUp { from { opacity:0; transform:translateY(10px); } to { opacity:1; transform:translateY(0); } }
+.spin-sm {
+  display: inline-block; width: 14px; height: 14px; border-radius: 50%;
+  border: 2px solid rgba(0,212,255,.25); border-top-color: var(--cyan);
+  animation: spin .7s linear infinite; vertical-align: middle; margin-right: 6px;
+}
+.pill { display: inline-flex; align-items: center; gap: 5px; font-family: var(--mono); font-size: .68rem; padding: 3px 10px; border-radius: 99px; }
+.pill-running { background: var(--cyan-lo); color: var(--cyan); border: 1px solid rgba(0,212,255,.2); }
+.pill-done    { background: var(--green-lo); color: var(--green); border: 1px solid rgba(0,229,160,.2); }
+.pill-wait    { background: var(--s3); color: var(--t3); }
+.artifact-json {
+  background: var(--s1); border: 1px solid var(--bdr); border-radius: 8px;
+  font-family: var(--mono); font-size: 11px; color: var(--t3);
+  max-height: 160px; overflow: auto; padding: 12px;
+  scrollbar-width: thin;
+}
+details > summary { cursor: pointer; font-size: .75rem; color: var(--t3); user-select: none; }
+details > summary:hover { color: var(--t2); }
+#report-body h1{font-size:1.3rem;font-family:var(--display);font-weight:700;color:var(--t1);margin:1.2rem 0 .5rem}
+#report-body h2{font-size:.95rem;font-family:var(--display);font-weight:600;color:var(--t2);margin:.9rem 0 .4rem;border-bottom:1px solid var(--bdr);padding-bottom:4px}
+#report-body p{color:var(--t2);margin:.4rem 0;line-height:1.65;font-size:.84rem}
+#report-body ul{color:var(--t2);padding-left:1.5rem;margin:.4rem 0;font-size:.84rem}
+#report-body code{background:var(--s3);color:var(--violet);padding:2px 5px;border-radius:4px;font-family:var(--mono);font-size:.82em}
+#report-body table{width:100%;border-collapse:collapse;margin:.8rem 0;font-size:.82rem}
+#report-body th{background:var(--s2);color:var(--cyan);padding:7px 11px;text-align:left;font-weight:600;border:1px solid var(--bdr);font-family:var(--mono);font-size:.7rem}
+#report-body td{padding:7px 11px;border:1px solid var(--bdr);color:var(--t1)}
+</style>
 </head>
 
-<body class="min-h-screen text-slate-100">
+<body>
 
-<!-- ═══ HERO HEADER ═══════════════════════════════════════════════════════════ -->
-<header class="hero-bg px-6 py-10 shadow-2xl">
-  <div class="max-w-4xl mx-auto">
-    <div class="flex items-start gap-4">
-      <div class="text-5xl mt-1 select-none">💀</div>
-      <div>
-        <h1 class="text-3xl font-extrabold text-white tracking-tight">
-          Dead Feature Detector
-        </h1>
-        <p class="text-indigo-200 mt-1 text-base font-light">
-          Find C++ code that's safe to delete — automatically
-        </p>
-        <p class="mt-3 text-sm text-indigo-300 max-w-2xl leading-relaxed">
-          Large C++ projects accumulate
-          <span class="tooltip-container">
-            <span class="font-semibold underline decoration-dotted">#ifdef guards</span>
-            <span class="tooltip-text">Lines like <code>#ifdef MY_FEATURE … #endif</code> that wrap code so it's only compiled when a certain flag is turned on. Over time, some of these flags get forgotten.</span>
-          </span>
-          for features that are never enabled in practice.
-          This tool scans your build system, maps every conditional block, and traces the
-          call graph to find code that <em>can never run</em> in any real build.
-        </p>
+<!-- ── Slide counter ──────────────────────────────────────────────────────── -->
+<div id="slide-counter">1 / 7</div>
+
+<!-- ── Slide deck ─────────────────────────────────────────────────────────── -->
+<div id="deck">
+
+  <!-- ══ SLIDE 0 : INTRO ══════════════════════════════════════════════════ -->
+  <div class="slide is-active" data-idx="0">
+    <div class="intro-inner">
+      <div class="intro-skull">💀</div>
+      <h1 class="intro-title">Dead<br/><em>Feature</em><br/>Detector</h1>
+      <p class="intro-sub">Large C++ codebases accumulate <code style="font-family:var(--mono);font-size:.9em;background:var(--s2);padding:2px 6px;border-radius:4px">#ifdef</code> blocks that were once useful but are now <strong>never compiled in any build</strong>. This tool finds them automatically.</p>
+
+      <!-- Concrete example of what gets flagged -->
+      <div class="dcd-wrap">
+        <div class="dcd-header">
+          <span class="dcd-header-file">feature.cpp — example</span>
+          <span class="dcd-header-badge">what we find</span>
+        </div>
+        <div class="dcd-line dim"><span class="dcd-ln">9</span><span class="dcd-code">// Is LEGACY_MODE still used anywhere?</span></div>
+        <div class="dcd-line dead"><span class="dcd-ln">10</span><span class="dcd-code"><span style="color:#c084fc">#ifdef</span> LEGACY_MODE</span><span class="dcd-marker bad">💀 never defined</span></div>
+        <div class="dcd-line dead"><span class="dcd-ln">11</span><span class="dcd-code">  processOldData();</span><span class="dcd-marker bad">dead code</span></div>
+        <div class="dcd-line dead"><span class="dcd-ln">12</span><span class="dcd-code"><span style="color:#c084fc">#endif</span></span></div>
+        <div class="dcd-line dim"><span class="dcd-ln">13</span><span class="dcd-code"></span></div>
+        <div class="dcd-line live"><span class="dcd-ln">14</span><span class="dcd-code">processModernData();</span><span class="dcd-marker ok">✓ reachable</span></div>
       </div>
-    </div>
-  </div>
-</header>
 
-<!-- ═══ MAIN CONTENT ══════════════════════════════════════════════════════════ -->
-<main class="max-w-4xl mx-auto px-6 py-8 space-y-6">
+      <!-- Why it's hard to find manually -->
+      <div style="display:flex;gap:10px;flex-wrap:wrap;max-width:560px;width:100%;text-align:left">
+        <div style="flex:1;min-width:160px;background:var(--s1);border:1px solid var(--bdr);border-radius:10px;padding:12px 14px">
+          <div style="font-family:var(--mono);font-size:.6rem;color:var(--amber);letter-spacing:.12em;text-transform:uppercase;margin-bottom:5px">Why grep fails</div>
+          <p style="font-size:.76rem;color:var(--t2);line-height:1.6"><code style="font-family:var(--mono);font-size:.8em;background:var(--s3);padding:1px 4px;border-radius:3px">grep "#ifdef LEGACY"</code> finds where the guard <em>appears</em>, but can't tell you whether <code style="font-family:var(--mono);font-size:.8em;background:var(--s3);padding:1px 4px;border-radius:3px">LEGACY</code> is ever <strong>defined</strong> in any build, or whether the code inside is ever <strong>reachable</strong> at runtime.</p>
+        </div>
+        <div style="flex:1;min-width:160px;background:var(--s1);border:1px solid var(--bdr);border-radius:10px;padding:12px 14px">
+          <div style="font-family:var(--mono);font-size:.6rem;color:var(--violet);letter-spacing:.12em;text-transform:uppercase;margin-bottom:5px">How it accumulates</div>
+          <p style="font-size:.76rem;color:var(--t2);line-height:1.6">Feature flags added for A/B experiments. Platform shims for OSes that were discontinued. Rollback guards for migrations that completed. Each one seemed temporary; none got cleaned up.</p>
+        </div>
+      </div>
 
-  <!-- ─── SETUP CARD ──────────────────────────────────────────────────────── -->
-  <div class="glass rounded-xl p-6" id="setup-card">
-    <h2 class="text-lg font-semibold text-slate-100 mb-1">🚀 Analyze a Project</h2>
-    <p class="text-slate-400 text-sm mb-4">
-      Point this tool at any C++ project that uses CMake.
-      It will automatically read the build settings, scan the source code, and generate a report.
-    </p>
-
-    <div class="flex flex-col sm:flex-row gap-3">
-      <input
-        id="project-path"
-        type="text"
-        placeholder="Path to your CMake project  (e.g. /Users/you/myproject)"
-        class="flex-1 bg-slate-800 border border-slate-600 rounded-lg px-4 py-2.5
-               text-sm text-slate-100 placeholder-slate-500 focus:outline-none
-               focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 mono"
-      />
-      <button
-        id="btn-analyze"
-        onclick="startAnalysis()"
-        class="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-500 rounded-lg font-semibold
-               text-sm transition-colors whitespace-nowrap disabled:opacity-50 disabled:cursor-not-allowed"
-      >
-        ▶ Run Analysis
+      <button class="intro-cta" onclick="go(1)">
+        Walk through how it works
+        <span class="intro-cta-arrow">→</span>
       </button>
-    </div>
-
-    <div class="flex items-center gap-3 mt-3">
-      <button
-        onclick="useDemo()"
-        class="text-sm text-indigo-400 hover:text-indigo-300 transition-colors underline decoration-dotted"
-      >
-        🧪 Use built-in demo project
-      </button>
-      <span class="text-slate-600">·</span>
-      <button
-        id="btn-reset"
-        onclick="resetJob()"
-        class="text-sm text-slate-500 hover:text-slate-400 transition-colors hidden"
-      >
-        ↺ Reset
-      </button>
-    </div>
-
-    <!-- Overall progress bar (hidden until running) -->
-    <div id="overall-progress" class="hidden mt-4">
-      <div class="flex justify-between text-xs text-slate-500 mb-1">
-        <span id="progress-label">Starting…</span>
-        <span id="progress-pct">0%</span>
-      </div>
-      <div class="progress-bar">
-        <div class="progress-fill" id="progress-fill" style="width:0%"></div>
-      </div>
+      <p class="intro-meta">CD(CS363IA) &nbsp;·&nbsp; Use ← → keys or click the arrows to navigate</p>
     </div>
   </div>
 
-  <!-- ─── HOW IT WORKS (collapsible) ─────────────────────────────────────── -->
-  <div class="glass rounded-xl overflow-hidden">
-    <button
-      onclick="toggleHowItWorks()"
-      class="w-full flex items-center justify-between px-6 py-4 text-left hover:bg-slate-800/50 transition-colors"
-    >
-      <span class="font-semibold text-slate-200">📖 How does this work?</span>
-      <span id="how-arrow" class="text-slate-500 transition-transform duration-200">▼</span>
-    </button>
-    <div id="how-content" class="hidden px-6 pb-5">
-      <div class="grid sm:grid-cols-2 gap-4 text-sm text-slate-400">
-        <div class="bg-slate-800/50 rounded-lg p-4">
-          <div class="text-indigo-400 font-semibold mb-1">Step 1 — Read the Build System</div>
-          <p>CMake tells us which feature flags (<span class="mono text-xs">#define</span> values) are switched on or off in each build target. Think of this as reading the project's "settings sheet".</p>
+  <!-- ══ SLIDE 1 : SETUP ══════════════════════════════════════════════════ -->
+  <div class="slide" data-idx="1">
+    <div class="slide-inner">
+      <div class="slide-label" style="--accent:#e8f4ff">The Approach</div>
+      <h2 class="slide-title">A Four-Phase<br/><span>Pipeline</span></h2>
+      <p class="slide-desc">The problem needs three completely different views of the codebase — build-system metadata, source-level preprocessor structure, and runtime reachability. Each phase handles one view, then a correlator combines them all.</p>
+
+      <!-- Why 3 views are needed -->
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:14px">
+        <div style="background:var(--s1);border:1px solid var(--bdr);border-left:3px solid var(--violet);border-radius:8px;padding:10px 13px">
+          <div style="font-family:var(--mono);font-size:.58rem;color:var(--violet);letter-spacing:.12em;text-transform:uppercase;margin-bottom:4px">Phase 1 answers</div>
+          <p style="font-size:.75rem;color:var(--t2);line-height:1.55">"Which macros are <strong>defined</strong> in each build?" Without this, we'd flag code that <em>is</em> active in a different configuration we didn't check.</p>
         </div>
-        <div class="bg-slate-800/50 rounded-lg p-4">
-          <div class="text-emerald-400 font-semibold mb-1">Step 2 — Map the Guards</div>
-          <p>We scan every C++ source file using a Clang plugin and record precisely which lines are wrapped in <span class="mono text-xs">#ifdef</span> / <span class="mono text-xs">#ifndef</span> blocks, and what flag controls each block.</p>
+        <div style="background:var(--s1);border:1px solid var(--bdr);border-left:3px solid var(--green);border-radius:8px;padding:10px 13px">
+          <div style="font-family:var(--mono);font-size:.58rem;color:var(--green);letter-spacing:.12em;text-transform:uppercase;margin-bottom:4px">Phase 2 answers</div>
+          <p style="font-size:.75rem;color:var(--t2);line-height:1.55">"Which source <strong>lines</strong> does each <code style="font-family:var(--mono);font-size:.82em;background:var(--s3);padding:1px 4px;border-radius:3px">#ifdef</code> guard?" The compiler erases this structure; we must capture it before erasure.</p>
         </div>
-        <div class="bg-slate-800/50 rounded-lg p-4">
-          <div class="text-amber-400 font-semibold mb-1">Step 3 — Trace Execution Paths</div>
-          <p>We compile the project to LLVM intermediate representation (IR) and walk the entire call graph from <span class="mono text-xs">main()</span>, finding every line that can ever actually run.</p>
-        </div>
-        <div class="bg-slate-800/50 rounded-lg p-4">
-          <div class="text-pink-400 font-semibold mb-1">Step 4 — Find Dead Code</div>
-          <p>Cross-referencing the three data sets: if a guarded block is never reachable in ANY build configuration, it's dead. We score each finding HIGH or MEDIUM confidence.</p>
+        <div style="background:var(--s1);border:1px solid var(--bdr);border-left:3px solid var(--amber);border-radius:8px;padding:10px 13px">
+          <div style="font-family:var(--mono);font-size:.58rem;color:var(--amber);letter-spacing:.12em;text-transform:uppercase;margin-bottom:4px">Phase 3 answers</div>
+          <p style="font-size:.75rem;color:var(--t2);line-height:1.55">"Which lines can actually <strong>run</strong>?" Code can compile fine but never be called. Static define-checking alone misses this class of dead code.</p>
         </div>
       </div>
-    </div>
-  </div>
 
-  <!-- ─── PIPELINE STEPS ──────────────────────────────────────────────────── -->
+      <!-- Pipeline overview: always visible -->
+      <div class="pipeline-strip">
+        <div class="ps-phase" data-n="01" style="--accent:var(--violet)">
+          <div class="ps-phase-num">Phase 01</div>
+          <div class="ps-phase-name">CMake Parser</div>
+          <div class="ps-phase-desc">Asks the build system: which <code style="font-family:var(--mono);font-size:.85em">-D</code> flags does each target use?</div>
+          <div class="ps-phase-file" style="background:var(--violet-lo);color:var(--violet);border-color:rgba(167,139,250,.15)">build_config_map.json</div>
+        </div>
+        <div class="ps-phase" data-n="02" style="--accent:var(--green)">
+          <div class="ps-phase-num">Phase 02</div>
+          <div class="ps-phase-name">Clang Plugin</div>
+          <div class="ps-phase-desc">Hooks into the preprocessor to record every <code style="font-family:var(--mono);font-size:.85em">#ifdef</code> block's exact line range.</div>
+          <div class="ps-phase-file" style="background:var(--green-lo);color:var(--green);border-color:rgba(0,229,160,.15)">ast_mapping.json</div>
+        </div>
+        <div class="ps-phase" data-n="03" style="--accent:var(--amber)">
+          <div class="ps-phase-num">Phase 03</div>
+          <div class="ps-phase-name">LLVM Pass</div>
+          <div class="ps-phase-desc">Compiles to bitcode and BFS-walks from <code style="font-family:var(--mono);font-size:.85em">main()</code> to find every reachable line.</div>
+          <div class="ps-phase-file" style="background:var(--amber-lo);color:var(--amber);border-color:rgba(255,179,71,.15)">reachability.json</div>
+        </div>
+        <div class="ps-phase" data-n="04" style="--accent:var(--red)">
+          <div class="ps-phase-num">Phase 04</div>
+          <div class="ps-phase-name">Correlator</div>
+          <div class="ps-phase-desc">Crosses all three datasets — anything never compiled AND never reachable is dead.</div>
+          <div class="ps-phase-file" style="background:var(--red-lo);color:var(--red);border-color:rgba(255,77,109,.15)">dead_features.json</div>
+        </div>
+      </div>
 
-  <!-- Phase 1 -->
-  <div class="glass rounded-xl overflow-hidden phase-idle" id="card-1">
-    <div class="px-6 py-5">
-      <div class="flex items-start gap-4">
-        <div class="phase-num bg-slate-700 text-slate-300" id="badge-1">1</div>
-        <div class="flex-1 min-w-0">
-          <div class="flex items-center justify-between gap-2 flex-wrap">
-            <h3 class="font-semibold text-slate-100">🔍 Read Build System</h3>
-            <div id="status-1" class="flex items-center gap-2 text-sm text-slate-500">
-              <span>Waiting</span>
+      <div class="slide-content">
+        <div class="inp-row">
+          <input id="project-path" class="inp" type="text" placeholder="Absolute path to your CMake project…" autocomplete="off" spellcheck="false"/>
+          <button id="btn-analyze" class="btn-primary" onclick="startAnalysis()">▶ Analyze</button>
+        </div>
+        <div style="display:flex;align-items:center;gap:12px;margin-top:-4px">
+          <button class="btn-ghost" onclick="useDemo()">🧪 Use built-in demo</button>
+          <button id="btn-reset" class="btn-ghost" style="display:none" onclick="resetJob()">↺ Reset</button>
+        </div>
+
+        <!-- Phase progress tracks -->
+        <div id="phase-tracks" style="display:none" class="glass" style="padding:16px 20px">
+          <div style="padding:14px 20px">
+            <div id="pt-1" class="phase-track">
+              <span class="phase-track-label mono" style="font-size:.68rem">PHASE 01</span>
+              <div class="phase-track-bar"><div class="phase-track-fill" id="pf-1"></div></div>
+              <span class="phase-track-status" id="ps-1">waiting</span>
+            </div>
+            <div id="pt-2" class="phase-track">
+              <span class="phase-track-label mono" style="font-size:.68rem">PHASE 02</span>
+              <div class="phase-track-bar"><div class="phase-track-fill" id="pf-2"></div></div>
+              <span class="phase-track-status" id="ps-2">waiting</span>
+            </div>
+            <div id="pt-3" class="phase-track">
+              <span class="phase-track-label mono" style="font-size:.68rem">PHASE 03</span>
+              <div class="phase-track-bar"><div class="phase-track-fill" id="pf-3"></div></div>
+              <span class="phase-track-status" id="ps-3">waiting</span>
+            </div>
+            <div id="pt-4" class="phase-track">
+              <span class="phase-track-label mono" style="font-size:.68rem">PHASE 04</span>
+              <div class="phase-track-bar"><div class="phase-track-fill" id="pf-4"></div></div>
+              <span class="phase-track-status" id="ps-4">waiting</span>
             </div>
           </div>
-          <p class="text-slate-400 text-sm mt-1">
-            We read your <span class="mono text-xs bg-slate-800 px-1.5 py-0.5 rounded">CMakeLists.txt</span>
-            and run CMake to discover every build target and the
-            <span class="tooltip-container">
-              <span class="underline decoration-dotted text-slate-300">compile-time flags</span>
-              <span class="tooltip-text">Values like <code>-DEXPERIMENTAL_FEATURE=1</code> passed to the compiler. They control which #ifdef blocks are activated.</span>
-            </span>
-            each target uses.
-            <strong class="text-slate-300">No code is compiled yet</strong> — this is metadata only.
-          </p>
-          <div id="result-1" class="mt-4 hidden"></div>
+        </div>
+
+        <!-- Log -->
+        <div id="log-wrap" class="log-wrap" style="display:none">
+          <div class="log-header" onclick="toggleLog()">
+            <span>📟 Live output</span>
+            <span id="log-arrow" style="font-size:.75rem;color:var(--t3)">▼</span>
+          </div>
+          <div id="log-body" class="log-body"></div>
+        </div>
+
+        <!-- Error -->
+        <div id="error-box" style="display:none;padding:14px 18px;border-radius:10px;background:rgba(255,77,109,.07);border:1px solid rgba(255,77,109,.2)">
+          <span style="color:var(--red);font-size:.85rem;font-weight:600">⚠ Analysis failed</span>
+          <p id="error-msg" style="color:var(--t2);font-size:.82rem;margin-top:6px;font-family:var(--mono)"></p>
         </div>
       </div>
     </div>
   </div>
 
-  <!-- Phase 2 -->
-  <div class="glass rounded-xl overflow-hidden phase-idle" id="card-2">
-    <div class="px-6 py-5">
-      <div class="flex items-start gap-4">
-        <div class="phase-num bg-slate-700 text-slate-300" id="badge-2">2</div>
-        <div class="flex-1 min-w-0">
-          <div class="flex items-center justify-between gap-2 flex-wrap">
-            <h3 class="font-semibold text-slate-100">🗺️ Map Feature Guards</h3>
-            <div id="status-2" class="flex items-center gap-2 text-sm text-slate-500">
-              <span>Waiting</span>
+  <!-- ══ SLIDE 2 : PHASE 1 ═════════════════════════════════════════════════ -->
+  <div class="slide slide-phase" data-idx="2" data-num="01"
+       style="--accent:var(--violet);--accent-lo:var(--violet-lo)">
+    <div class="slide-inner">
+      <div class="slide-label">Phase 01 · Build System</div>
+      <h2 class="slide-title">Reading the<br/><span>Build Config</span></h2>
+      <p class="slide-desc">Before we can say whether code is dead, we need to know what flags each build target uses. CMake handles this — we just need to ask it correctly.</p>
+
+      <div class="slide-content">
+        <!-- Full-width context cards (don't go in the grid so they don't unbalance columns) -->
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+          <div style="background:var(--s2);border:1px solid var(--bdr);border-radius:8px;padding:10px 13px;border-left:3px solid var(--t3)">
+            <div style="font-family:var(--mono);font-size:.58rem;color:var(--t3);letter-spacing:.12em;text-transform:uppercase;margin-bottom:4px">Background: CMake &amp; build systems</div>
+            <p style="font-size:.75rem;color:var(--t3);line-height:1.6"><strong style="color:var(--t2)">CMake</strong> is a build system generator — reads <code style="font-family:var(--mono);font-size:.8em;background:var(--s3);padding:1px 3px;border-radius:2px">CMakeLists.txt</code>, emits Makefiles/Ninja. A <strong style="color:var(--t2)">build target</strong> is one compiled binary. Each target can use different <code style="font-family:var(--mono);font-size:.8em;background:var(--s3);padding:1px 3px;border-radius:2px">-DFOO</code> defines that control which <code style="font-family:var(--mono);font-size:.8em;background:var(--s3);padding:1px 3px;border-radius:2px">#ifdef</code> branches compile.</p>
+          </div>
+          <div style="background:var(--s1);border:1px solid var(--bdr);border-radius:8px;overflow:hidden;font-family:var(--mono);font-size:11px">
+            <div style="background:var(--s2);border-bottom:1px solid var(--bdr);padding:5px 12px;font-size:.62rem;color:var(--t3)">compile_commands.json — one entry</div>
+            <pre style="padding:8px 14px;margin:0;color:var(--t2);white-space:pre-wrap;font-size:10.5px">[{ <span style="color:#86efac">"file"</span>: <span style="color:#86efac">"feature.cpp"</span>,
+   <span style="color:#86efac">"command"</span>: <span style="color:#86efac">"clang++ -DEXPERIMENTAL_FEATURE ..."</span> }]</pre>
+          </div>
+        </div>
+
+        <div class="concept-card">
+          <p>When CMake runs with <code>-DCMAKE_EXPORT_COMPILE_COMMANDS=ON</code> it writes a <em>compilation database</em> — one entry per compiler invocation. The <code>-D</code> flags buried in each command are exactly what <code>#ifdef</code> checks. <strong>Phase 01 extracts every define used by every target</strong>, giving Phase 04 the complete map of "what macros are live in any build?"</p>
+        </div>
+
+        <!-- Steps + live data side-by-side -->
+        <div class="explain-grid">
+          <div class="explain-panel">
+            <div class="steps-lbl">How it works</div>
+            <div class="steps-list">
+              <div class="step-item">
+                <span class="step-n">1</span>
+                <div class="step-txt">Run <code>cmake -DCMAKE_EXPORT_COMPILE_COMMANDS=ON</code>. CMake emits <code>compile_commands.json</code> — every compiler invocation in one JSON file.</div>
+              </div>
+              <div class="step-item">
+                <span class="step-n">2</span>
+                <div class="step-txt">Parse each command for <code>-DFOO</code> / <code>-DFOO=BAR</code> patterns — these are the preprocessor defines controlling which <code>#ifdef</code> branches compile.</div>
+              </div>
+              <div class="step-item">
+                <span class="step-n">3</span>
+                <div class="step-txt">Infer target name from path: each command contains <code>CMakeFiles/&lt;target&gt;.dir/</code> — a regex match gives the target→file mapping.</div>
+              </div>
+              <div class="step-item">
+                <span class="step-n">4</span>
+                <div class="step-txt">Write <code>build_config_map.json</code>: <strong>target → {defines[], files[]}</strong>. Phase 04 looks up each source file here to find which targets compile it.</div>
+              </div>
+            </div>
+            <div class="tech-callout">
+              <strong>No compiler? No problem.</strong> If no C++ compiler exists, a fake no-op <code>fake-cxx.sh</code> is generated and passed via <code>-DCMAKE_CXX_COMPILER</code>. CMake still emits full <code>compile_commands.json</code> — nothing is actually compiled in this phase.
+            </div>
+            <div class="artifact-badge"><span class="artifact-dot"></span>produces build_config_map.json</div>
+          </div>
+
+          <div id="p1-content" class="data-panel">
+            <div class="waiting-state">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg>
+              <p>Run the analysis to see which build targets were discovered and what <code style="font-family:var(--mono);font-size:.85em">-D</code> flags each one uses.</p>
             </div>
           </div>
-          <p class="text-slate-400 text-sm mt-1">
-            A custom
-            <span class="tooltip-container">
-              <span class="underline decoration-dotted text-slate-300">Clang plugin</span>
-              <span class="tooltip-text">Clang is the C++ compiler we use. A plugin hooks into it while it reads your code, letting us intercept every #ifdef it encounters — without fully compiling anything.</span>
-            </span>
-            reads every source file and records where each
-            <span class="mono text-xs bg-slate-800 px-1.5 py-0.5 rounded">#ifdef</span> block starts and ends,
-            and which flag controls it.
-          </p>
-          <div id="result-2" class="mt-4 hidden"></div>
         </div>
       </div>
     </div>
   </div>
 
-  <!-- Phase 3 -->
-  <div class="glass rounded-xl overflow-hidden phase-idle" id="card-3">
-    <div class="px-6 py-5">
-      <div class="flex items-start gap-4">
-        <div class="phase-num bg-slate-700 text-slate-300" id="badge-3">3</div>
-        <div class="flex-1 min-w-0">
-          <div class="flex items-center justify-between gap-2 flex-wrap">
-            <h3 class="font-semibold text-slate-100">🔬 Trace Execution Paths</h3>
-            <div id="status-3" class="flex items-center gap-2 text-sm text-slate-500">
-              <span>Waiting</span>
+  <!-- ══ SLIDE 3 : PHASE 2 ═════════════════════════════════════════════════ -->
+  <div class="slide slide-phase" data-idx="3" data-num="02"
+       style="--accent:var(--green);--accent-lo:var(--green-lo)">
+    <div class="slide-inner">
+      <div class="slide-label">Phase 02 · Source Analysis</div>
+      <h2 class="slide-title">Mapping the<br/><span>#ifdef Guards</span></h2>
+      <p class="slide-desc">The compiler never sees <code style="font-family:var(--mono);font-size:.9em;background:var(--s3);padding:1px 5px;border-radius:3px">#ifdef</code> blocks — the preprocessor strips them before compilation. So we have to intercept the preprocessor itself before it strips anything.</p>
+
+      <div class="slide-content">
+        <!-- Full-width context -->
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+          <div style="background:var(--s2);border:1px solid var(--bdr);border-radius:8px;padding:10px 13px;border-left:3px solid var(--t3)">
+            <div style="font-family:var(--mono);font-size:.58rem;color:var(--t3);letter-spacing:.12em;text-transform:uppercase;margin-bottom:4px">Background: compilation pipeline</div>
+            <p style="font-size:.75rem;color:var(--t3);line-height:1.6">C++ pipeline: <strong style="color:var(--t2)">Preprocessor</strong> (<code style="font-family:var(--mono);font-size:.8em;background:var(--s3);padding:1px 3px;border-radius:2px">#include</code>, <code style="font-family:var(--mono);font-size:.8em;background:var(--s3);padding:1px 3px;border-radius:2px">#ifdef</code>) → <strong style="color:var(--t2)">Compiler</strong> (parses C++, emits IR) → <strong style="color:var(--t2)">Linker</strong>. By the time the compiler sees the code, ALL <code style="font-family:var(--mono);font-size:.8em;background:var(--s3);padding:1px 3px;border-radius:2px">#ifdef</code> structure is gone. We must intercept at the preprocessor stage.</p>
+          </div>
+          <div class="concept-card" style="margin:0">
+            <p><strong>Phase 02</strong> hooks into Clang's <code>PPCallbacks</code> interface — virtual methods that fire for every preprocessor event (<code>Ifdef</code>, <code>Ifndef</code>, <code>Else</code>, <code>Endif</code>). This records the full block structure — macro name, file, and exact line range — before any branch is erased. There is no other way to get this information after preprocessing completes.</p>
+          </div>
+        </div>
+
+        <div class="explain-grid">
+          <div class="explain-panel">
+            <div class="steps-lbl">How it works</div>
+            <div class="steps-list">
+              <div class="step-item">
+                <span class="step-n">1</span>
+                <div class="step-txt">A C++ plugin registers a <code>PPCallbacks</code> handler with Clang's preprocessor before parsing begins. Callbacks fire for every directive encountered.</div>
+              </div>
+              <div class="step-item">
+                <span class="step-n">2</span>
+                <div class="step-txt">The plugin listens to <code>Ifdef</code>, <code>Ifndef</code>, <code>Elif</code>, <code>Else</code>, <code>Endif</code> events. Each reports the macro name and exact source location (file + line).</div>
+              </div>
+              <div class="step-item">
+                <span class="step-n">3</span>
+                <div class="step-txt">Nesting tracked with a <strong>stack</strong>: <code>#ifdef</code> pushes a frame, <code>#endif</code> pops and records the complete range. System-header blocks push a sentinel frame so <code>Endif</code> stays aligned.</div>
+              </div>
+              <div class="step-item">
+                <span class="step-n">4</span>
+                <div class="step-txt">System headers skipped via <code>SM.isInSystemHeader()</code>. Only user code matters.</div>
+              </div>
+              <div class="step-item">
+                <span class="step-n">5</span>
+                <div class="step-txt">Flushed to <code>ast_mapping.json</code> in <code>HandleTranslationUnit()</code> — not the destructor (fires too late when hosted in-process).</div>
+              </div>
+            </div>
+            <div class="tech-callout">
+              <strong>Critical:</strong> use <code>-add-plugin</code>, NOT <code>-plugin</code>. Our plugin is <code>CmdlineBeforeMainAction</code> (runs alongside the parse, not replacing it). <code>-plugin</code> expects <code>ReplaceAction</code> type and will reject the invocation.
+            </div>
+            <div class="artifact-badge"><span class="artifact-dot"></span>produces ast_mapping.json</div>
+          </div>
+
+          <div id="p2-content" class="data-panel">
+            <div class="waiting-state">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg>
+              <p>Source files with color-coded <code style="font-family:var(--mono);font-size:.85em">#ifdef</code> regions appear here after Phase 02 completes.</p>
             </div>
           </div>
-          <p class="text-slate-400 text-sm mt-1">
-            Your project is compiled to
-            <span class="tooltip-container">
-              <span class="underline decoration-dotted text-slate-300">LLVM IR</span>
-              <span class="tooltip-text">LLVM Intermediate Representation — a portable, machine-independent form of your program that still has all the logic. It's like a blueprint, not the actual executable.</span>
-            </span>,
-            then we walk every function call starting from
-            <span class="mono text-xs bg-slate-800 px-1.5 py-0.5 rounded">main()</span>
-            to find every source line that can possibly execute.
-          </p>
-          <div id="result-3" class="mt-4 hidden"></div>
         </div>
       </div>
     </div>
   </div>
 
-  <!-- Phase 4 -->
-  <div class="glass rounded-xl overflow-hidden phase-idle" id="card-4">
-    <div class="px-6 py-5">
-      <div class="flex items-start gap-4">
-        <div class="phase-num bg-slate-700 text-slate-300" id="badge-4">4</div>
-        <div class="flex-1 min-w-0">
-          <div class="flex items-center justify-between gap-2 flex-wrap">
-            <h3 class="font-semibold text-slate-100">💀 Find Dead Features</h3>
-            <div id="status-4" class="flex items-center gap-2 text-sm text-slate-500">
-              <span>Waiting</span>
+  <!-- ══ SLIDE 4 : PHASE 3 ═════════════════════════════════════════════════ -->
+  <div class="slide slide-phase" data-idx="4" data-num="03"
+       style="--accent:var(--amber);--accent-lo:var(--amber-lo)">
+    <div class="slide-inner">
+      <div class="slide-label">Phase 03 · LLVM IR</div>
+      <h2 class="slide-title">Tracing Every<br/><span>Execution Path</span></h2>
+      <p class="slide-desc">Compiling ≠ running. Code can compile perfectly and still be unreachable at runtime. This phase uses LLVM's intermediate representation to find every function that <em>can actually be called</em>.</p>
+
+      <div class="slide-content">
+        <!-- Full-width context -->
+        <div style="background:var(--s2);border:1px solid var(--bdr);border-radius:8px;padding:10px 13px;border-left:3px solid var(--t3)">
+          <div style="font-family:var(--mono);font-size:.58rem;color:var(--t3);letter-spacing:.12em;text-transform:uppercase;margin-bottom:5px">Background: LLVM IR &amp; compilation passes</div>
+          <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;font-family:var(--mono);font-size:.65rem;margin-bottom:7px">
+            <span style="color:var(--violet);background:var(--violet-lo);padding:3px 8px;border-radius:5px;border:1px solid rgba(167,139,250,.2)">C++ source</span>
+            <span style="color:var(--t3)">→ clang -emit-llvm -g →</span>
+            <span style="color:var(--amber);background:var(--amber-lo);padding:3px 8px;border-radius:5px;border:1px solid rgba(255,179,71,.2)">.bc files</span>
+            <span style="color:var(--t3)">→ llvm-link →</span>
+            <span style="color:var(--cyan);background:var(--cyan-lo);padding:3px 8px;border-radius:5px;border:1px solid rgba(0,212,255,.2)">whole_program.bc</span>
+            <span style="color:var(--t3)">→ opt + DeadFeaturePass →</span>
+            <span style="color:var(--green);background:var(--green-lo);padding:3px 8px;border-radius:5px;border:1px solid rgba(0,229,160,.2)">reachability.json</span>
+          </div>
+          <p style="font-size:.75rem;color:var(--t3);line-height:1.6"><strong style="color:var(--t2)">LLVM IR</strong> is a typed, SSA-form, platform-independent assembly language. Every LLVM-based compiler compiles to it. A <strong style="color:var(--t2)">Module Pass</strong> runs on the whole linked module, seeing every function and call. The <code style="font-family:var(--mono);font-size:.8em;background:var(--s3);padding:1px 3px;border-radius:2px">-g</code> flag embeds <code style="font-family:var(--mono);font-size:.8em;background:var(--s3);padding:1px 3px;border-radius:2px">DILocation</code> metadata into every IR instruction — the only way to map IR back to original source file + line (the bridge to Phase 02's block map).</p>
+        </div>
+
+        <div class="concept-card">
+          <p>By linking all <code>.bc</code> files into one <strong>whole-program bitcode</strong> file (LTO mode), the pass sees every function and every call edge across all <code>.cpp</code> files simultaneously. BFS from <code>main()</code> marks every reachable function; <code>DILocation</code> metadata then maps each reachable IR instruction back to its source line. Result: a set of <strong>{file → reachable lines}</strong> that Phase 04 intersects with the <code>#ifdef</code> block map.</p>
+        </div>
+
+        <div class="explain-grid">
+          <div class="explain-panel">
+            <div class="steps-lbl">How it works</div>
+            <div class="steps-list">
+              <div class="step-item">
+                <span class="step-n">1</span>
+                <div class="step-txt">Each source compiled to <code>.bc</code> with <code>clang++ -emit-llvm -g</code>. <code>-g</code> embeds file paths + line numbers into the bitcode as <code>DILocation</code> metadata.</div>
+              </div>
+              <div class="step-item">
+                <span class="step-n">2</span>
+                <div class="step-txt"><code>llvm-link</code> merges all <code>.bc</code> files into <code>whole_program.bc</code> (LTO). Without this, cross-file calls are unresolved symbols — untraceable.</div>
+              </div>
+              <div class="step-item">
+                <span class="step-n">3</span>
+                <div class="step-txt">BFS seeds: <code>main()</code> + all functions with <strong>external linkage</strong>. Each wave visits direct callees via <code>CallBase::getCalledFunction()</code>.</div>
+              </div>
+              <div class="step-item">
+                <span class="step-n">4</span>
+                <div class="step-txt"><strong>Indirect calls</strong> (function pointers, virtuals): conservatively adds ALL address-taken functions to reachable set if any reachable function has a null callee.</div>
+              </div>
+              <div class="step-item">
+                <span class="step-n">5</span>
+                <div class="step-txt">For every reachable instruction: <code>I.getDebugLoc()</code> → <code>DILocation::getLine()</code> + <code>DIFile</code> → appended to <code>reachable_lines[file]</code>.</div>
+              </div>
+            </div>
+            <div class="tech-callout">
+              <strong>Why LTO?</strong> Without merging bitcode first, a call from <code>main.cpp</code> into <code>utils.cpp</code> looks like an unresolved symbol — un-traceable. LTO makes the entire call graph visible in one pass. New PM (<code>PassInfoMixin&lt;&gt;</code> + <code>llvmGetPassPluginInfo</code>) is required for LLVM 14+.
+            </div>
+            <div class="artifact-badge"><span class="artifact-dot"></span>produces reachability.json</div>
+          </div>
+
+          <div id="p3-content" class="data-panel">
+            <div class="waiting-state">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg>
+              <p>The interactive call graph with BFS animation appears here after Phase 03 completes.</p>
             </div>
           </div>
-          <p class="text-slate-400 text-sm mt-1">
-            We cross-reference: for every
-            <span class="mono text-xs bg-slate-800 px-1.5 py-0.5 rounded">#ifdef</span> block,
-            is the guarding flag <em>ever</em> set in any build config?
-            And are those source lines <em>ever</em> reachable?
-            If no to both → the code is dead. Confidence is scored
-            <span class="badge-high px-2 py-0.5 rounded text-xs font-semibold">HIGH</span> or
-            <span class="badge-medium px-2 py-0.5 rounded text-xs font-semibold">MEDIUM</span>.
-          </p>
-          <div id="result-4" class="mt-4 hidden"></div>
         </div>
       </div>
     </div>
   </div>
 
-  <!-- ─── LIVE LOG ─────────────────────────────────────────────────────────── -->
-  <div id="log-section" class="hidden glass rounded-xl p-5">
-    <div class="flex items-center justify-between mb-3">
-      <h3 class="font-semibold text-slate-200 text-sm">📟 Live Log</h3>
-      <button
-        onclick="document.getElementById('log-terminal').scrollTop = 99999"
-        class="text-xs text-slate-500 hover:text-slate-400"
-      >scroll to bottom ↓</button>
-    </div>
-    <div class="log-terminal" id="log-terminal"></div>
-  </div>
+  <!-- ══ SLIDE 5 : PHASE 4 ═════════════════════════════════════════════════ -->
+  <div class="slide slide-phase" data-idx="5" data-num="04"
+       style="--accent:var(--red);--accent-lo:var(--red-lo)">
+    <div class="slide-inner">
+      <div class="slide-label">Phase 04 · Correlator</div>
+      <h2 class="slide-title">Dead Code<br/><span>Identified</span></h2>
+      <p class="slide-desc">Three independent datasets, one final verdict. For each <code style="font-family:var(--mono);font-size:.9em;background:var(--s3);padding:1px 5px;border-radius:3px">#ifdef</code> block, the correlator asks: is it ever compiled? Is it ever reached? If neither — it's dead.</p>
 
-  <!-- ─── FINAL REPORT ─────────────────────────────────────────────────────── -->
-  <div id="report-section" class="hidden glass rounded-xl overflow-hidden">
+      <div class="slide-content">
+        <!-- Full-width context -->
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+          <div style="background:var(--s2);border:1px solid var(--bdr);border-radius:8px;padding:10px 13px;border-left:3px solid var(--t3)">
+            <div style="font-family:var(--mono);font-size:.58rem;color:var(--t3);letter-spacing:.12em;text-transform:uppercase;margin-bottom:4px">Background: static dead code analysis</div>
+            <p style="font-size:.75rem;color:var(--t3);line-height:1.6">A region is <strong style="color:var(--t2)">statically dead</strong> if it can never execute under any input/configuration — provable without running the program. Our analysis is <em>sound</em> for HIGH findings: if a macro truly never appears in Phase 01, it provably never compiles. No false positives possible.</p>
+          </div>
+          <div class="concept-card" style="margin:0">
+            <p><strong>Join logic:</strong> For each block B with macro M, let <em>configs(B)</em> = targets that compile B's file. If M ∉ defines(config) for ALL configs → <strong style="color:var(--red)">HIGH</strong>. Else if M ∈ defines(config) for some config but B's lines ∩ reachable_lines = ∅ for all such configs → <strong style="color:var(--amber)">MEDIUM</strong>. Otherwise: live. <strong>Per-file filtering</strong> is critical: targets that don't compile B's file are excluded — they can't make the code live or dead.</p>
+          </div>
+        </div>
 
-    <!-- Summary banner -->
-    <div id="summary-banner" class="px-6 py-5 border-b border-slate-700/50"></div>
+        <div class="explain-grid">
+          <div class="explain-panel">
+            <div class="steps-lbl">How it works</div>
+            <div class="steps-list">
+              <div class="step-item">
+                <span class="step-n">1</span>
+                <div class="step-txt">For each <code>#ifdef MACRO</code> block (Phase 02): look up <code>MACRO</code> in Phase 01's define map (per-file targets only). <strong>Never defined anywhere</strong> → <strong>HIGH confidence dead</strong>.</div>
+              </div>
+              <div class="step-item">
+                <span class="step-n">2</span>
+                <div class="step-txt"><code>#else</code> branches: inverse check. If parent macro is defined in ALL relevant configs, the <code>#else</code> can never be active.</div>
+              </div>
+              <div class="step-item">
+                <span class="step-n">3</span>
+                <div class="step-txt">Macro IS defined in some config: cross-reference block lines with Phase 03 reachable set. Zero overlap → code compiles but never runs → <strong>MEDIUM confidence dead</strong>.</div>
+              </div>
+              <div class="step-item">
+                <span class="step-n">4</span>
+                <div class="step-txt"><code>build_file_config_sets()</code> maps each source file to only its compiling targets. Unrelated targets excluded — prevents false negatives from targets that never see the file.</div>
+              </div>
+            </div>
+            <div class="conf-legend">
+              <div class="conf-legend-card" style="border-color:rgba(255,77,109,.2)">
+                <span class="conf-badge conf-HIGH">HIGH</span>
+                <p>Macro never defined in any build. Code cannot compile. Safe to delete.</p>
+              </div>
+              <div class="conf-legend-card" style="border-color:rgba(255,179,71,.2)">
+                <span class="conf-badge conf-MEDIUM">MEDIUM</span>
+                <p>Macro defined somewhere, but lines never reachable at runtime. Review before deleting.</p>
+              </div>
+            </div>
+            <div class="artifact-badge"><span class="artifact-dot"></span>produces dead_features.json + report.md</div>
+          </div>
 
-    <!-- Dead features table -->
-    <div id="features-table-section" class="px-6 py-5 border-b border-slate-700/50 hidden">
-      <h3 class="font-semibold text-slate-200 mb-3">Dead Features Found</h3>
-      <div class="overflow-x-auto">
-        <table class="w-full text-sm">
-          <thead>
-            <tr>
-              <th class="text-left px-3 py-2 bg-slate-800/80 text-slate-400 font-medium rounded-tl-lg">Macro / Flag</th>
-              <th class="text-left px-3 py-2 bg-slate-800/80 text-slate-400 font-medium">Branch</th>
-              <th class="text-left px-3 py-2 bg-slate-800/80 text-slate-400 font-medium">File : Lines</th>
-              <th class="text-left px-3 py-2 bg-slate-800/80 text-slate-400 font-medium">Lines Saved</th>
-              <th class="text-left px-3 py-2 bg-slate-800/80 text-slate-400 font-medium rounded-tr-lg">Confidence</th>
-            </tr>
-          </thead>
-          <tbody id="features-tbody"></tbody>
-        </table>
-      </div>
-    </div>
-
-    <!-- Full markdown report -->
-    <div class="px-6 py-5">
-      <div class="flex items-center justify-between mb-4">
-        <h3 class="font-semibold text-slate-200">Full Report</h3>
-        <div class="flex gap-2">
-          <button
-            onclick="downloadReport()"
-            class="text-xs px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-lg transition-colors"
-          >📥 Download .md</button>
-          <button
-            onclick="copyJSON()"
-            class="text-xs px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded-lg transition-colors"
-          >📋 Copy JSON</button>
+          <div id="p4-content" class="data-panel">
+            <div class="waiting-state">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg>
+              <p>Dead feature cards with code snippets appear here after Phase 04 completes.</p>
+            </div>
+          </div>
         </div>
       </div>
-      <div id="report-body" class="text-sm leading-relaxed"></div>
     </div>
-
   </div>
 
-  <!-- ─── ERROR CARD ───────────────────────────────────────────────────────── -->
-  <div id="error-card" class="hidden glass rounded-xl p-6 border border-red-500/30">
-    <h3 class="font-semibold text-red-400 mb-2">⚠ Analysis Failed</h3>
-    <p id="error-msg" class="text-sm text-slate-400 mono"></p>
-    <p class="text-xs text-slate-500 mt-2">Check the live log above for details. Common fixes: make sure the project path exists and has a CMakeLists.txt.</p>
+  <!-- ══ SLIDE 6 : RESULTS ═════════════════════════════════════════════════ -->
+  <div class="slide" data-idx="6" style="--accent:var(--cyan)">
+    <div class="slide-inner">
+      <div class="slide-label">Analysis Complete</div>
+      <h2 class="slide-title" id="results-headline">Waiting for<br/><span>results…</span></h2>
+
+      <div class="slide-content">
+        <!-- How to read results — always visible -->
+        <div class="interp-strip">
+          <div class="interp-card" style="border-left:3px solid var(--red)">
+            <div class="interp-label" style="color:var(--red)">HIGH confidence</div>
+            <p>The macro guarding this block is <strong>never defined</strong> in any known build configuration. This code path cannot possibly be compiled. It is safe to delete the entire <code style="font-family:var(--mono);font-size:.88em">#ifdef</code> block with no risk of breaking any build. <strong>Zero false positives</strong> — if the define doesn't exist anywhere in Phase 01's map, it truly never compiles.</p>
+          </div>
+          <div class="interp-card" style="border-left:3px solid var(--amber)">
+            <div class="interp-label" style="color:var(--amber)">MEDIUM confidence</div>
+            <p>The macro IS defined in some configuration, so the code compiles — but Phase 03 found that the guarded lines are <strong>never reached at runtime</strong> from <code style="font-family:var(--mono);font-size:.88em">main()</code>. Review before deleting: it may be a callback registered via function pointer (conservatively included) or a safety guard for rare error paths. Check the call graph before removing.</p>
+          </div>
+          <div class="interp-card" style="border-left:3px solid var(--green)">
+            <div class="interp-label" style="color:var(--green)">Workflow</div>
+            <p><strong>1.</strong> Remove HIGH findings first — provably safe. <strong>2.</strong> Re-run the pipeline after each removal — one dead block can cascade and expose new dead blocks downstream. <strong>3.</strong> Tackle MEDIUM findings with a code review. <strong>LOC removable</strong> is a lower bound: after all removals, the true saving is typically 30–60% larger due to cascading effects.</p>
+          </div>
+        </div>
+
+        <!-- Quick reference -->
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:14px">
+          <div style="background:var(--s1);border:1px solid var(--bdr);border-radius:8px;padding:10px 13px">
+            <div style="font-family:var(--mono);font-size:.58rem;color:var(--t3);letter-spacing:.12em;text-transform:uppercase;margin-bottom:6px">What the pipeline found</div>
+            <div style="font-size:.76rem;color:var(--t2);line-height:1.7">
+              <span style="color:var(--violet)">Phase 1</span> → which macros exist per build config<br/>
+              <span style="color:var(--green)">Phase 2</span> → which lines each macro guards<br/>
+              <span style="color:var(--amber)">Phase 3</span> → which lines actually run (BFS from main)<br/>
+              <span style="color:var(--red)">Phase 4</span> → intersection = dead code
+            </div>
+          </div>
+          <div style="background:var(--s1);border:1px solid var(--bdr);border-radius:8px;padding:10px 13px">
+            <div style="font-family:var(--mono);font-size:.58rem;color:var(--t3);letter-spacing:.12em;text-transform:uppercase;margin-bottom:6px">Limitations to keep in mind</div>
+            <div style="font-size:.76rem;color:var(--t2);line-height:1.7">
+              Indirect calls (function pointers, virtuals) are handled <strong>conservatively</strong> — over-approximation means some MEDIUM findings may be false positives.<br/>
+              Only analyzes build configurations that CMake knows about. Hidden configs (hand-crafted build scripts) are not considered.
+            </div>
+          </div>
+        </div>
+
+        <div id="results-content">
+          <div class="waiting-state">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg>
+            <p>The full report with stats, dead feature table, and export options will appear here when all four phases complete.</p>
+          </div>
+        </div>
+      </div>
+    </div>
   </div>
 
-</main>
+</div><!-- #deck -->
 
-<!-- ═══ FOOTER ═══════════════════════════════════════════════════════════════ -->
-<footer class="max-w-4xl mx-auto px-6 pb-8 text-center text-xs text-slate-600">
-  Assignment 29 — Dead Feature Detector &nbsp;·&nbsp;
-  Phases: CMake Extract → Clang Plugin → LLVM Pass → Correlator
-</footer>
+<!-- ── Bottom nav bar ─────────────────────────────────────────────────────── -->
+<div id="nav-bar">
+  <button class="nav-btn nav-btn-prev" id="btn-prev" onclick="prevSlide()" disabled>
+    <svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M9 2L4 7l5 5"/></svg>
+    prev
+  </button>
+  <div id="nav-dots"></div>
+  <button class="nav-btn nav-btn-next" id="btn-next" onclick="nextSlide()">
+    next
+    <svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M5 2l5 5-5 5"/></svg>
+  </button>
+</div>
 
-<!-- ═══ JAVASCRIPT ════════════════════════════════════════════════════════════ -->
+<!-- ══════════════════════════════════════════════════════════════════════════
+     JAVASCRIPT
+════════════════════════════════════════════════════════════════════════════ -->
 <script>
-// ── State ─────────────────────────────────────────────────────────────────────
-let pollTimer = null;
-let logOffset = 0;
-let lastStatus = "idle";
-let deadFeaturesData = null;
-let reportMdData     = null;
+'use strict';
 
-const PHASE_PROGRESS = { 0: 0, 1: 20, 2: 45, 3: 72, 4: 100 };
-const PHASE_LABELS   = {
-  0: "Starting…",
-  1: "Reading build system…",
-  2: "Mapping #ifdef blocks…",
-  3: "Tracing execution paths…",
-  4: "Correlating results…"
+// ── Navigation ────────────────────────────────────────────────────────────────
+const TOTAL   = 7;
+let   current = 0;
+
+// Build dots
+const dotsEl = document.getElementById('nav-dots');
+for (let i = 0; i < TOTAL; i++) {
+  const d = document.createElement('button');
+  d.className = 'dot' + (i === 0 ? ' active' : '');
+  d.title = ['Intro','Pipeline','Phase 1','Phase 2','Phase 3','Phase 4','Results'][i];
+  d.onclick = () => go(i);
+  dotsEl.appendChild(d);
+}
+
+function prevSlide() { go(current - 1); }
+function nextSlide() { go(current + 1); }
+
+function go(n) {
+  if (n < 0 || n >= TOTAL || n === current) return;
+  const slides = document.querySelectorAll('.slide');
+  const prev   = current;
+  const fwd    = n > prev;
+  current = n;
+
+  const out = slides[prev];
+  const inn = slides[n];
+
+  // Step 1: Snap inn to its off-screen start position with NO transition.
+  // .no-anim suppresses transitions on inn so the reposition is instant.
+  inn.classList.add('no-anim');
+  inn.classList.remove('is-active', 'is-left');
+  if (!fwd) inn.classList.add('is-left'); // back: start from left; fwd: start from right (default)
+
+  // Update nav UI immediately (dots, counter, buttons)
+  document.querySelectorAll('.dot').forEach((d, i) =>
+    d.classList.toggle('active', i === current));
+  document.getElementById('slide-counter').textContent = `${current + 1} / ${TOTAL}`;
+  document.getElementById('btn-prev').disabled = current === 0;
+  document.getElementById('btn-next').disabled = current === TOTAL - 1;
+
+  // Step 2: Double-rAF — first frame commits the off-screen position to the GPU;
+  // second frame re-enables transitions and triggers the actual slide animation.
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      inn.classList.remove('no-anim');
+
+      // Outgoing slide exits
+      out.classList.remove('is-active');
+      if (fwd) out.classList.add('is-left'); // fwd: out slides left; back: out slides right (default)
+
+      // Incoming slide enters center
+      inn.classList.remove('is-left');
+      inn.classList.add('is-active');
+    });
+  });
+}
+
+// Keyboard
+document.addEventListener('keydown', e => {
+  if (e.key === 'ArrowRight' || e.key === 'ArrowDown')  nextSlide();
+  if (e.key === 'ArrowLeft'  || e.key === 'ArrowUp')    prevSlide();
+});
+
+// Touch swipe
+let _tx = 0;
+document.addEventListener('touchstart', e => { _tx = e.touches[0].clientX; }, {passive:true});
+document.addEventListener('touchend',   e => {
+  const dx = e.changedTouches[0].clientX - _tx;
+  if (Math.abs(dx) > 50) go(dx < 0 ? current + 1 : current - 1);
+}, {passive:true});
+
+// ── App state ─────────────────────────────────────────────────────────────────
+const S = {
+  pollTimer:  null, logOffset: 0,
+  lastStatus: 'idle',
+  lastPS:     {1:'idle',2:'idle',3:'idle',4:'idle'},
+  artifacts:  {},
+  srcFiles:   {},
+  macroColors:{},
+  colorIdx:   0,
+  cgData:     null,
+  cgNodeEls:  null,
+  cgLinkEls:  null,
+  deadData:   null,
+  reportMd:   null,
+  logOpen:    true,
 };
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
-function $(id) { return document.getElementById(id); }
+const PALETTE = [
+  {bg:'rgba(167,139,250,.07)', border:'#a78bfa', cls:'m0'},
+  {bg:'rgba(255,179,71,.07)',  border:'#ffb347', cls:'m1'},
+  {bg:'rgba(0,229,160,.07)',   border:'#00e5a0', cls:'m2'},
+  {bg:'rgba(0,212,255,.07)',   border:'#00d4ff', cls:'m3'},
+];
 
-function setPhaseCard(n, state) {
-  const card  = $(`card-${n}`);
-  const badge = $(`badge-${n}`);
-  const stat  = $(`status-${n}`);
-  card.className = card.className.replace(/phase-\w+/, `phase-${state}`);
-  if (state === "running") {
-    badge.className = badge.className.replace(/bg-\S+|text-\S+/g, "").trim()
-      + " bg-indigo-500/20 text-indigo-300";
-    stat.innerHTML = `<span class="spinner"></span> <span class="text-indigo-300">Running…</span>`;
-  } else if (state === "done") {
-    badge.className = badge.className.replace(/bg-\S+|text-\S+/g, "").trim()
-      + " bg-emerald-500/20 text-emerald-300";
-    stat.innerHTML = `<span class="text-emerald-400">✓ Done</span>`;
-  } else if (state === "error") {
-    badge.className = badge.className.replace(/bg-\S+|text-\S+/g, "").trim()
-      + " bg-red-500/20 text-red-300";
-    stat.innerHTML = `<span class="text-red-400">✗ Error</span>`;
-  } else {
-    badge.className = badge.className.replace(/bg-\S+|text-\S+/g, "").trim()
-      + " bg-slate-700 text-slate-300";
-    stat.innerHTML = `<span class="text-slate-500">Waiting</span>`;
-  }
+function $i(id) { return document.getElementById(id); }
+
+// ── Syntax highlight (minimal C++) ─────────────────────────────────────────────
+function hlCpp(raw) {
+  let s = raw.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  s = s.replace(/(\/\/[^\n]*)$/gm,  '<span class="hl-cmt">$1</span>');
+  s = s.replace(/^(\s*)(#\w+)/,     '$1<span class="hl-pp">$2</span>');
+  s = s.replace(/"([^"]*)"/g,        '<span class="hl-str">"$1"</span>');
+  s = s.replace(/\b(\d+)\b/g,        '<span class="hl-num">$1</span>');
+  s = s.replace(/\b(int|bool|float|double|char|void|auto|const|nullptr|true|false|std|return|if|else|for|while|include)\b/g,'<span class="hl-kw">$1</span>');
+  return s;
 }
 
-function setProgress(phase) {
-  const pct = PHASE_PROGRESS[phase] || 0;
-  $("progress-fill").style.width = pct + "%";
-  $("progress-pct").textContent  = pct + "%";
-  $("progress-label").textContent = PHASE_LABELS[phase] || "";
+// ── Phase progress tracks (setup slide) ───────────────────────────────────────
+function setTrack(n, state) {
+  const fill   = $i(`pf-${n}`);
+  const status = $i(`ps-${n}`);
+  if (!fill) return;
+  fill.className   = 'phase-track-fill ' + state;
+  status.className = 'phase-track-status ' + state;
+  status.textContent = state === 'running' ? 'running…' : state === 'done' ? '✓ done' : 'waiting';
 }
 
-// ── Log rendering ─────────────────────────────────────────────────────────────
+// ── Log ───────────────────────────────────────────────────────────────────────
 function appendLog(lines) {
-  const el = $("log-terminal");
-  const wasAtBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 60;
-  lines.forEach(({ phase, msg }) => {
-    const span = document.createElement("div");
-    const cls  = `log-${phase.replace(/\d/, p => p)}`;
-    span.className = cls;
-    span.textContent = `[${phase}] ${msg}`;
-    el.appendChild(span);
+  const el = $i('log-body');
+  if (!lines || !lines.length) return;
+  const atBot = el.scrollHeight - el.scrollTop - el.clientHeight < 50;
+  lines.forEach(({phase, msg}) => {
+    const d = document.createElement('div');
+    const cls = phase.startsWith('phase') ? 'lp' + phase.replace('phase','') :
+                phase === 'error' ? 'lerr' : '';
+    d.className = 'log-line ' + cls;
+    d.textContent = `[${phase}] ${msg}`;
+    el.appendChild(d);
   });
-  if (wasAtBottom) el.scrollTop = el.scrollHeight;
+  if (atBot) el.scrollTop = el.scrollHeight;
 }
 
-// ── Phase result renderers ─────────────────────────────────────────────────────
-function renderPhase1Result(status) {
-  // We don't have per-phase data streamed back yet;
-  // results are shown in the final report. Brief message only.
+function toggleLog() {
+  S.logOpen = !S.logOpen;
+  $i('log-body').style.display  = S.logOpen ? '' : 'none';
+  $i('log-arrow').textContent   = S.logOpen ? '▲' : '▼';
 }
 
-// ── Summary banner ─────────────────────────────────────────────────────────────
-function renderSummary(summary, dead) {
-  const high   = summary.high   || 0;
-  const medium = summary.medium || 0;
-  const loc    = summary.high_loc_removable || 0;
+// ── Macro color ───────────────────────────────────────────────────────────────
+function macroColor(macro) {
+  if (!S.macroColors[macro]) {
+    S.macroColors[macro] = PALETTE[S.colorIdx % PALETTE.length];
+    S.colorIdx++;
+  }
+  return S.macroColors[macro];
+}
 
-  $("summary-banner").innerHTML = `
-    <div class="flex flex-wrap gap-6 items-center">
-      <div>
-        <div class="text-3xl font-extrabold ${high + medium > 0 ? 'text-red-400' : 'text-emerald-400'}">
-          ${high + medium}
+// ── Build source viewer (Phase 2) ──────────────────────────────────────────────
+function buildSrcViewer(container, astMapping) {
+  const files = Object.keys(astMapping.files || {});
+  if (!files.length) return;
+
+  const tabsBar = document.createElement('div');
+  tabsBar.className = 'src-tabs-bar';
+
+  const panels = {};
+  files.forEach((fp, i) => {
+    const name = fp.split('/').pop();
+    const tab  = document.createElement('button');
+    tab.className = 'src-tab' + (i === 0 ? ' active' : '');
+    tab.textContent = name;
+    tab.onclick = () => {
+      tabsBar.querySelectorAll('.src-tab').forEach(t => t.classList.remove('active'));
+      tab.classList.add('active');
+      Object.values(panels).forEach(p => p.style.display = 'none');
+      panels[fp].style.display = '';
+    };
+    tabsBar.appendChild(tab);
+  });
+
+  const outer = document.createElement('div');
+  outer.className = 'src-outer';
+  outer.appendChild(tabsBar);
+
+  const legend = { items: {} };
+
+  files.forEach((fp, i) => {
+    const lines = S.srcFiles[fp] || [];
+    const codeWrap = document.createElement('div');
+    codeWrap.className = 'src-code-wrap';
+    codeWrap.style.display = i === 0 ? '' : 'none';
+
+    const table = document.createElement('div');
+    table.className = 'src-table-inner';
+    table.id = 'sv_' + fp.split('/').pop().replace(/\./g,'_');
+
+    lines.forEach((raw, idx) => {
+      const ln  = idx + 1;
+      const row = document.createElement('div');
+      row.className = 'src-line';
+      row.id = `${table.id}-L${ln}`;
+      row.dataset.ln = ln;
+
+      const lnEl  = document.createElement('span');
+      lnEl.className = 'src-linenum';
+      lnEl.textContent = ln;
+
+      const cEl = document.createElement('span');
+      cEl.className = 'src-code-cell';
+      cEl.innerHTML = hlCpp(raw) || '&nbsp;';
+
+      row.appendChild(lnEl);
+      row.appendChild(cEl);
+      table.appendChild(row);
+    });
+
+    (astMapping.files[fp] || []).forEach(block => {
+      const macro = block.condition;
+      const col   = macroColor(macro);
+      legend.items[macro] = col;
+      (block.branches || []).forEach(branch => {
+        for (let l = branch.start_line; l <= branch.end_line; l++) {
+          const r = document.getElementById(`${table.id}-L${l}`);
+          if (r && !r.classList.contains('l-dead')) {
+            r.classList.add(col.cls);
+            r.style.borderLeftColor = col.border;
+            r.dataset.macro = macro;
+            r.title = `#${branch.kind} ${macro} (${branch.start_line}–${branch.end_line})`;
+          }
+        }
+      });
+    });
+
+    codeWrap.appendChild(table);
+    outer.appendChild(codeWrap);
+    panels[fp] = codeWrap;
+  });
+
+  const legDiv = document.createElement('div');
+  legDiv.className = 'src-legend';
+  Object.entries(legend.items).forEach(([macro, col]) => {
+    legDiv.insertAdjacentHTML('beforeend',
+      `<div class="legend-item"><div class="legend-swatch" style="background:${col.bg};border:1px solid ${col.border}"></div><span class="mono" style="font-size:.7rem">${macro}</span></div>`);
+  });
+  legDiv.insertAdjacentHTML('beforeend',
+    `<div class="legend-item"><div class="legend-swatch" style="background:rgba(0,229,160,.1);border:1px solid var(--green)"></div>Reachable</div>
+     <div class="legend-item"><div class="legend-swatch" style="background:rgba(255,77,109,.1);border:1px solid var(--red)"></div>Dead 💀</div>`);
+
+  container.innerHTML = '';
+  container.appendChild(outer);
+  container.appendChild(legDiv);
+}
+
+function annotateReachability(reachability) {
+  const rl = reachability.reachable_lines || {};
+  Object.entries(rl).forEach(([fp, lines]) => {
+    const name  = fp.split('/').pop().replace(/\./g,'_');
+    const tid   = 'sv_' + name;
+    const lset  = new Set(lines);
+    if (!S.srcFiles[fp]) return;
+    S.srcFiles[fp].forEach((_, idx) => {
+      const l = idx + 1;
+      const r = document.getElementById(`${tid}-L${l}`);
+      if (r && lset.has(l) && !r.classList.contains('l-dead'))
+        r.classList.add('l-reach');
+    });
+  });
+}
+
+function annotateDeadLines(deadFeatures) {
+  (deadFeatures.dead_features || []).forEach(df => {
+    const tid = 'sv_' + df.source_file.split('/').pop().replace(/\./g,'_');
+    for (let l = df.start_line; l <= df.end_line; l++) {
+      const r = document.getElementById(`${tid}-L${l}`);
+      if (!r) continue;
+      r.classList.remove('l-reach');
+      PALETTE.forEach(p => r.classList.remove(p.cls));
+      r.classList.add('l-dead');
+      r.style.borderLeftColor = 'var(--red)';
+      r.title = '💀 ' + (df.reason || 'Dead code');
+      if (l === df.start_line) {
+        const badge = document.createElement('span');
+        badge.className = 'dead-lbl';
+        badge.textContent = '💀 DEAD';
+        r.querySelector('.src-code-cell').appendChild(badge);
+      }
+    }
+  });
+}
+
+// ── Call graph (Phase 3) ──────────────────────────────────────────────────────
+function buildCallGraph(container, cgData) {
+  S.cgData = cgData;
+  const W = container.clientWidth || 660, H = 290;
+
+  const html = `
+    <div class="cg-outer">
+      <div class="cg-toolbar">
+        <span class="cg-toolbar-title">Call graph — BFS from entry points</span>
+        <div>
+          <button class="cg-btn cg-btn-rst" onclick="resetCG()">↺</button>
+          <button class="cg-btn cg-btn-bfs" id="btn-bfs" onclick="animateBFS()">▶ Animate BFS</button>
         </div>
-        <div class="text-slate-400 text-xs mt-0.5">dead branch(es) found</div>
       </div>
-      <div class="h-10 w-px bg-slate-700 hidden sm:block"></div>
-      <div>
-        <div class="text-2xl font-bold text-red-300">${high}</div>
-        <div class="text-slate-400 text-xs mt-0.5 flex items-center gap-1">
-          <span class="badge-high px-1.5 py-0.5 rounded text-xs font-semibold">HIGH</span>
-          statically dead
+      <svg id="cg-svg" height="${H}"></svg>
+      <div class="cg-legend">
+        <div class="cg-legend-item"><div class="cg-dot" style="background:rgba(167,139,250,.5);border:2px solid var(--violet)"></div>Entry point</div>
+        <div class="cg-legend-item"><div class="cg-dot" style="background:rgba(0,229,160,.3);border:2px solid var(--green)"></div>Reachable</div>
+        <div class="cg-legend-item"><div class="cg-dot" style="background:rgba(71,85,105,.5);border:2px solid #475569"></div>stdlib / STL</div>
+      </div>
+    </div>`;
+  container.insertAdjacentHTML('beforeend', html);
+
+  const svg = d3.select('#cg-svg').attr('width', W);
+  svg.append('defs').selectAll('marker')
+    .data(['dim','lit']).join('marker')
+    .attr('id', d => `arr-${d}`)
+    .attr('viewBox','-0 -4 8 8').attr('refX',20).attr('refY',0)
+    .attr('orient','auto').attr('markerWidth',5).attr('markerHeight',5)
+    .append('path').attr('d','M0,-4L8,0L0,4')
+    .attr('fill', d => d === 'lit' ? 'var(--green)' : '#334155');
+
+  const nodeById = new Map(cgData.nodes.map(d => [d.id, d]));
+  const links    = cgData.edges.map(e => ({
+    source: nodeById.get(e.source) || e.source,
+    target: nodeById.get(e.target) || e.target,
+    id: e.source + '→' + e.target,
+  }));
+
+  const linkEls = svg.append('g').selectAll('path')
+    .data(links).join('path')
+    .attr('class','cg-link')
+    .attr('marker-end','url(#arr-dim)');
+
+  const nodeG = svg.append('g').selectAll('g')
+    .data(cgData.nodes).join('g')
+    .call(d3.drag()
+      .on('start', (ev,d) => { if(!ev.active) sim.alphaTarget(.3).restart(); d.fx=d.x; d.fy=d.y; })
+      .on('drag',  (ev,d) => { d.fx=ev.x; d.fy=ev.y; })
+      .on('end',   (ev,d) => { if(!ev.active) sim.alphaTarget(0); d.fx=null; d.fy=null; }));
+
+  nodeG.append('circle')
+    .attr('r', d => d.is_group ? 36 : 28)
+    .attr('fill', d => d.is_entry ? 'rgba(167,139,250,.2)'
+                      : d.is_group ? 'rgba(51,65,85,.4)'
+                      : d.reachable ? 'rgba(0,229,160,.12)'
+                      : 'rgba(51,65,85,.2)')
+    .attr('stroke', d => d.is_entry ? 'var(--violet)'
+                        : d.is_group ? '#475569'
+                        : d.reachable ? 'var(--green)' : '#334155')
+    .attr('stroke-width', 2);
+
+  nodeG.append('text')
+    .attr('text-anchor','middle').attr('dy', d => d.subtitle ? '-3' : '4')
+    .attr('font-size', d => d.is_group ? 9 : 10)
+    .attr('fill','var(--t1)')
+    .attr('font-family','JetBrains Mono, monospace')
+    .text(d => { const n = d.name||d.id; return n.length>17 ? n.slice(0,15)+'…' : n; });
+
+  nodeG.filter(d => !!d.subtitle).append('text')
+    .attr('text-anchor','middle').attr('dy','9')
+    .attr('font-size',8).attr('fill','var(--t3)')
+    .attr('font-family','JetBrains Mono, monospace')
+    .text(d => d.subtitle);
+
+  nodeG.filter(d => d.is_entry).append('text')
+    .attr('text-anchor','middle').attr('dy','-22')
+    .attr('font-size',7).attr('fill','var(--violet)')
+    .text('ENTRY');
+
+  const sim = d3.forceSimulation(cgData.nodes)
+    .force('link',      d3.forceLink(links).id(d=>d.id).distance(140))
+    .force('charge',    d3.forceManyBody().strength(-280))
+    .force('center',    d3.forceCenter(W/2, H/2))
+    .force('collision', d3.forceCollide().radius(50))
+    .on('tick', () => {
+      linkEls.attr('d', d => {
+        const dx = d.target.x - d.source.x, dy = d.target.y - d.source.y;
+        const dr = Math.sqrt(dx*dx+dy*dy)*1.5;
+        return `M${d.source.x},${d.source.y}A${dr},${dr} 0 0,1 ${d.target.x},${d.target.y}`;
+      });
+      nodeG.attr('transform', d =>
+        `translate(${Math.max(40,Math.min(W-40,d.x))},${Math.max(40,Math.min(H-40,d.y))})`);
+    });
+
+  S.cgNodeEls = nodeG;
+  S.cgLinkEls = linkEls;
+}
+
+async function animateBFS() {
+  if (!S.cgData || !S.cgNodeEls) return;
+  const btn = $i('btn-bfs');
+  btn.disabled = true; btn.textContent = '⏳ BFS running…';
+
+  S.cgNodeEls.select('circle')
+    .attr('fill','rgba(51,65,85,.2)').attr('stroke','#334155');
+  S.cgLinkEls.attr('class','cg-link').attr('marker-end','url(#arr-dim)');
+
+  const adj = {};
+  S.cgData.edges.forEach(e => {
+    const s = typeof e.source==='object' ? e.source.id : e.source;
+    const t = typeof e.target==='object' ? e.target.id : e.target;
+    if (!adj[s]) adj[s] = [];
+    adj[s].push(t);
+  });
+
+  const visited = new Set();
+  const step = async wave => {
+    const dedup = [...new Set(wave.filter(id => !visited.has(id)))];
+    if (!dedup.length) return;
+    dedup.forEach(id => visited.add(id));
+
+    S.cgNodeEls.filter(d => dedup.includes(d.id)).select('circle')
+      .transition().duration(420)
+      .attr('fill', d => d.is_entry ? 'rgba(167,139,250,.45)' : 'rgba(0,229,160,.35)')
+      .attr('stroke', d => d.is_entry ? 'var(--violet)' : 'var(--green)');
+
+    S.cgLinkEls.filter(d => {
+      const src = typeof d.source==='object' ? d.source.id : d.source;
+      return dedup.includes(src);
+    }).transition().duration(420)
+      .attr('class','cg-link lit').attr('marker-end','url(#arr-lit)');
+
+    const next = [];
+    dedup.forEach(id => (adj[id]||[]).forEach(t => { if(!visited.has(t)) next.push(t); }));
+    await new Promise(r => setTimeout(r, 680));
+    await step(next);
+  };
+
+  await step([...S.cgData.entry_points]);
+  btn.disabled = false; btn.textContent = '▶ Animate BFS';
+}
+
+function resetCG() {
+  if (!S.cgNodeEls) return;
+  S.cgNodeEls.select('circle').transition().duration(300)
+    .attr('fill', d => d.is_entry ? 'rgba(167,139,250,.2)' : d.is_group ? 'rgba(51,65,85,.4)' : d.reachable ? 'rgba(0,229,160,.12)' : 'rgba(51,65,85,.2)')
+    .attr('stroke', d => d.is_entry ? 'var(--violet)' : d.is_group ? '#475569' : d.reachable ? 'var(--green)' : '#334155');
+  S.cgLinkEls.attr('class','cg-link').attr('marker-end','url(#arr-dim)');
+}
+
+// ── Dead feature cards (Phase 4) ──────────────────────────────────────────────
+function buildDeadCards(container, deadFeatures) {
+  const list = (deadFeatures.dead_features || []);
+  if (!list.length) {
+    container.innerHTML = '<div class="waiting-state"><p style="color:var(--green);font-size:1.1rem">🎉 No dead features found!</p></div>';
+    return;
+  }
+  const cards = list.map(df => {
+    const fname  = df.source_file.split('/').pop();
+    const lines  = S.srcFiles[df.source_file] || [];
+    const cStart = Math.max(0, df.start_line - 2);
+    const cEnd   = Math.min(lines.length, df.end_line + 2);
+    const snippet = lines.slice(cStart, cEnd).map((raw, i) => {
+      const l   = cStart + i + 1;
+      const dead = l >= df.start_line && l <= df.end_line;
+      const dir  = raw.trim().startsWith('#');
+      const cls  = dead ? 'is-dead' : dir ? 'is-dir' : 'is-norm';
+      return `<div class="dead-snippet-line ${cls}">
+        <span class="dead-snippet-ln">${l}</span>
+        <span>${hlCpp(raw)||'&nbsp;'}</span>
+        ${dead ? '<span class="dead-lbl" style="margin-left:auto">DEAD</span>' : ''}
+      </div>`;
+    }).join('');
+
+    return `<div class="dead-card fade-in">
+      <div class="dead-card-header">
+        <div style="font-size:1.5rem">💀</div>
+        <div style="flex:1">
+          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:6px">
+            <code style="font-family:var(--mono);font-size:.82rem;color:var(--violet);background:var(--s3);padding:3px 8px;border-radius:5px">${df.macro||'(#else)'}</code>
+            <span class="conf-badge conf-${df.confidence}">${df.confidence}</span>
+            <span style="font-family:var(--mono);font-size:.68rem;color:var(--t3)">${fname}:${df.start_line}–${df.end_line}</span>
+            <span style="font-size:.75rem;color:var(--green);font-weight:600">−${df.loc} LOC</span>
+          </div>
+          <p style="font-size:.82rem;color:var(--t2);line-height:1.6">${df.reason||''}</p>
         </div>
       </div>
-      <div>
-        <div class="text-2xl font-bold text-amber-300">${medium}</div>
-        <div class="text-slate-400 text-xs mt-0.5 flex items-center gap-1">
-          <span class="badge-medium px-1.5 py-0.5 rounded text-xs font-semibold">MEDIUM</span>
-          needs review
-        </div>
+      <div class="dead-card-body">${snippet}</div>
+    </div>`;
+  }).join('');
+
+  container.innerHTML = `<div style="display:flex;flex-direction:column;gap:12px" class="fade-in">${cards}</div>`;
+}
+
+// ── Results slide ──────────────────────────────────────────────────────────────
+function buildResults(summary, dead, md) {
+  const high = summary.high||0, med = summary.medium||0;
+  const loc  = summary.high_loc_removable||0;
+  const total= high+med;
+
+  $i('results-headline').innerHTML = total > 0
+    ? `<span style="color:var(--red)">${total}</span> dead<br/>branch${total!==1?'es':''} found`
+    : `<span style="color:var(--green)">Zero</span> dead<br/>branches`;
+
+  const tableRows = (dead||[]).map(d =>
+    `<tr>
+      <td><code style="font-family:var(--mono);font-size:.78rem;color:var(--violet)">${d.macro||'#else'}</code></td>
+      <td style="font-family:var(--mono);font-size:.75rem;color:var(--t2)">${d.source_file.split('/').pop()}:${d.start_line}–${d.end_line}</td>
+      <td style="text-align:center;color:var(--green);font-weight:600">${d.loc}</td>
+      <td><span class="conf-badge conf-${d.confidence}">${d.confidence}</span></td>
+    </tr>`).join('');
+
+  const el = $i('results-content');
+  el.innerHTML = `
+    <div class="stat-row fade-in">
+      <div class="stat-box">
+        <div class="stat-num" style="color:${total>0?'var(--red)':'var(--green)'}">${total}</div>
+        <div class="stat-label">dead branches</div>
       </div>
-      <div class="h-10 w-px bg-slate-700 hidden sm:block"></div>
-      <div>
-        <div class="text-2xl font-bold text-emerald-300">${loc}</div>
-        <div class="text-slate-400 text-xs mt-0.5">lines safely removable</div>
+      <div class="stat-box">
+        <div class="stat-num" style="color:var(--red)">${high}</div>
+        <div class="stat-label">HIGH confidence</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-num" style="color:var(--amber)">${med}</div>
+        <div class="stat-label">MEDIUM confidence</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-num" style="color:var(--green)">${loc}</div>
+        <div class="stat-label">lines removable</div>
       </div>
     </div>
-    ${high + medium === 0 ? `
-      <p class="mt-3 text-emerald-400 text-sm">
-        🎉 No dead features found in this configuration!
-      </p>
-    ` : `
-      <p class="mt-3 text-slate-400 text-sm">
-        ${high > 0
-          ? `<strong class="text-slate-200">${high} HIGH-confidence finding(s)</strong> are safe to delete right now.`
-          : ''}
-        ${medium > 0
-          ? ` ${medium} MEDIUM finding(s) need manual review.`
-          : ''}
-      </p>
-    `}
+
+    ${tableRows ? `<div class="glass" style="overflow:hidden;margin-bottom:14px">
+      <table class="data-table">
+        <thead><tr>
+          <th>Macro</th><th>Location</th><th style="text-align:center">LOC</th><th>Confidence</th>
+        </tr></thead>
+        <tbody>${tableRows}</tbody>
+      </table>
+    </div>` : ''}
+
+    <div style="display:flex;gap:10px;margin-bottom:14px">
+      <button class="btn-ghost" onclick="downloadReport()">📥 Download report.md</button>
+      <button class="btn-ghost" onclick="copyJSON()">📋 Copy JSON</button>
+    </div>
+
+    ${md ? `<details><summary style="margin-bottom:8px">Full report (Markdown)</summary>
+      <div id="report-body" style="margin-top:12px">${marked.parse(md)}</div>
+    </details>` : ''}
   `;
 }
 
-function renderFeaturesTable(dead) {
-  if (!dead || dead.length === 0) return;
-  $("features-table-section").classList.remove("hidden");
-  const tbody = $("features-tbody");
-  tbody.innerHTML = dead.map(d => {
-    const file   = d.source_file.split("/").pop();
-    const conf   = d.confidence === "HIGH"
-      ? `<span class="badge-high px-2 py-0.5 rounded text-xs font-semibold">HIGH</span>`
-      : `<span class="badge-medium px-2 py-0.5 rounded text-xs font-semibold">MEDIUM</span>`;
-    return `
-      <tr class="border-t border-slate-700/50 hover:bg-slate-800/30 transition-colors">
-        <td class="px-3 py-2.5">
-          <code class="text-violet-300 bg-slate-800 px-1.5 py-0.5 rounded text-xs">${d.macro}</code>
-        </td>
-        <td class="px-3 py-2.5">
-          <code class="text-slate-400 text-xs">#${d.branch_kind}</code>
-        </td>
-        <td class="px-3 py-2.5">
-          <span class="text-slate-300 text-xs mono">${file}<span class="text-slate-500">:${d.start_line}–${d.end_line}</span></span>
-        </td>
-        <td class="px-3 py-2.5 text-center">
-          <span class="text-emerald-400 font-semibold">${d.loc}</span>
-        </td>
-        <td class="px-3 py-2.5">${conf}</td>
-      </tr>
-    `;
-  }).join("");
+// ── Artifacts loader ───────────────────────────────────────────────────────────
+async function loadArtifacts() {
+  try {
+    const a = await fetch('/api/artifacts').then(r => r.json());
+    Object.assign(S.artifacts, a);
+  } catch(_) {}
 }
 
-function renderReport(md) {
-  $("report-body").innerHTML = marked.parse(md);
+// ── Phase event: runs after each phase completes ───────────────────────────────
+async function onPhaseComplete(n) {
+  await loadArtifacts();
+
+  if (n === 1 && S.artifacts.build_config_map) {
+    const targets = S.artifacts.build_config_map.targets || {};
+    const rows = Object.entries(targets).map(([name, info]) => {
+      const defs = (info.defines||[]).map(d =>
+        `<span class="tag accent">${d}</span>`).join(' ') || '<span class="tag">(none)</span>';
+      const files = (info.files||[]).map(f=>f.source.split('/').pop()).join(', ');
+      return `<tr>
+        <td><span class="tag" style="color:var(--violet)">${name}</span></td>
+        <td>${defs}</td>
+        <td style="font-family:var(--mono);font-size:.72rem;color:var(--t2)">${files}</td>
+      </tr>`;
+    }).join('');
+
+    $i('p1-content').innerHTML = `<div class="fade-in glass" style="overflow:hidden">
+      <table class="data-table">
+        <thead><tr><th>Target</th><th>Active -D Defines</th><th>Source Files</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
+    <p style="font-size:.78rem;color:var(--t3);line-height:1.65">Each row is one build target. The define list tells Phase 04 which <code style="font-family:var(--mono);font-size:.85em">#ifdef</code> branches will ever compile under this target. A macro absent from every row is provably dead.</p>
+    <details style="margin-top:10px"><summary>📄 build_config_map.json (raw)</summary>
+      <div class="artifact-json" style="margin-top:8px">${JSON.stringify(S.artifacts.build_config_map,null,2).slice(0,600)}…</div>
+    </details>`;
+  }
+
+  if (n === 2 && S.artifacts.ast_mapping) {
+    const files = Object.keys(S.artifacts.ast_mapping.files || {});
+    for (const fp of files) {
+      if (S.srcFiles[fp]) continue;
+      try {
+        const r = await fetch(`/api/source?file=${encodeURIComponent(fp)}`).then(r=>r.json());
+        if (r.lines) S.srcFiles[fp] = r.lines;
+      } catch(_) {}
+    }
+    const container = $i('p2-content');
+    container.innerHTML = '';
+    buildSrcViewer(container, S.artifacts.ast_mapping);
+  }
+
+  if (n === 3 && S.artifacts.reachability) {
+    if (Object.keys(S.srcFiles).length) annotateReachability(S.artifacts.reachability);
+
+    const container = $i('p3-content');
+    container.innerHTML = '';
+
+    const userLines = Object.entries(S.artifacts.reachability.reachable_lines||{})
+      .filter(([fp]) => !fp.includes('/opt/homebrew') && !fp.includes('/usr/'))
+      .flatMap(([,ls]) => ls).length;
+    container.insertAdjacentHTML('beforeend',`
+      <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:8px">
+        <div class="glass" style="padding:11px 18px;text-align:center;flex:1">
+          <div style="font-family:var(--display);font-size:1.6rem;font-weight:800;color:var(--amber)">${S.artifacts.reachability.reachable_functions?.length||'—'}</div>
+          <div style="font-size:.7rem;color:var(--t2)">functions reachable</div>
+        </div>
+        <div class="glass" style="padding:11px 18px;text-align:center;flex:1">
+          <div style="font-family:var(--display);font-size:1.6rem;font-weight:800;color:var(--green)">${userLines}</div>
+          <div style="font-size:.7rem;color:var(--t2)">user code lines reachable</div>
+        </div>
+      </div>`);
+
+    try {
+      const cg = await fetch('/api/callgraph').then(r => r.json());
+      if (cg.nodes?.length) buildCallGraph(container, cg);
+    } catch(_) {}
+  }
+
+  if (n === 4 && S.artifacts.dead_features) {
+    if (Object.keys(S.srcFiles).length) annotateDeadLines(S.artifacts.dead_features);
+    const container = $i('p4-content');
+    container.innerHTML = '';
+    buildDeadCards(container, S.artifacts.dead_features);
+    S.deadData = S.artifacts.dead_features;
+  }
 }
 
-// ── Main poll loop ─────────────────────────────────────────────────────────────
+// ── Poll loop ──────────────────────────────────────────────────────────────────
 async function poll() {
   try {
-    // Fetch status
-    const st = await fetch("/api/status").then(r => r.json());
+    const [st, logResp] = await Promise.all([
+      fetch('/api/status').then(r => r.json()),
+      fetch(`/api/log?offset=${S.logOffset}`).then(r => r.json()),
+    ]);
 
-    // Fetch new log lines
-    const logResp = await fetch(`/api/log?offset=${logOffset}`).then(r => r.json());
-    if (logResp.lines && logResp.lines.length > 0) {
+    if (logResp.lines?.length) {
       appendLog(logResp.lines);
-      logOffset += logResp.lines.length;
+      S.logOffset += logResp.lines.length;
     }
 
-    // Update phase cards
     const ps = st.phase_statuses || {};
-    [1, 2, 3, 4].forEach(n => setPhaseCard(n, ps[n] || "idle"));
-
-    // Update progress
-    if (st.status === "running") {
-      setProgress(st.phase || 0);
-    } else if (st.status === "done") {
-      setProgress(4);
-    }
-
-    // Handle completion
-    if (st.status === "done" && lastStatus !== "done") {
-      $("btn-analyze").disabled = false;
-      $("btn-analyze").textContent = "▶ Run Analysis";
-      $("btn-reset").classList.remove("hidden");
-
-      // Show report
-      if (st.summary) {
-        deadFeaturesData = st.dead_features;
-        reportMdData     = st.report_md;
-
-        $("report-section").classList.remove("hidden");
-        renderSummary(st.summary, st.dead_features);
-        renderFeaturesTable(st.dead_features);
-        if (st.report_md) renderReport(st.report_md);
+    for (let n = 1; n <= 4; n++) {
+      const newState = ps[n] || 'idle';
+      if (newState !== S.lastPS[n]) {
+        S.lastPS[n] = newState;
+        setTrack(n, newState === 'idle' ? '' : newState);
+        if (newState === 'done') onPhaseComplete(n);
       }
-      clearInterval(pollTimer);
     }
 
-    // Handle error
-    if (st.status === "error" && lastStatus !== "error") {
-      $("btn-analyze").disabled = false;
-      $("btn-analyze").textContent = "▶ Run Analysis";
-      $("btn-reset").classList.remove("hidden");
-      $("error-card").classList.remove("hidden");
-      $("error-msg").textContent = st.error || "Unknown error";
-      clearInterval(pollTimer);
+    if (st.status === 'done' && S.lastStatus !== 'done') {
+      S.reportMd  = st.report_md;
+      buildResults(st.summary || {}, st.dead_features || [], st.report_md || '');
+      clearInterval(S.pollTimer);
+      $i('btn-analyze').disabled = false;
+      $i('btn-analyze').textContent = '▶ Analyze';
+      $i('btn-reset').style.display = '';
     }
 
-    lastStatus = st.status;
-  } catch (e) {
-    console.error("poll error:", e);
-  }
+    if (st.status === 'error' && S.lastStatus !== 'error') {
+      clearInterval(S.pollTimer);
+      $i('btn-analyze').disabled = false;
+      $i('btn-analyze').textContent = '▶ Analyze';
+      $i('btn-reset').style.display = '';
+      $i('error-box').style.display = '';
+      $i('error-msg').textContent = st.error || 'Unknown error';
+    }
+
+    S.lastStatus = st.status;
+  } catch(e) { console.error('poll:', e); }
 }
 
 // ── Actions ────────────────────────────────────────────────────────────────────
 async function startAnalysis() {
-  const path = $("project-path").value.trim();
-  if (!path) { alert("Please enter a project path first."); return; }
+  const path = $i('project-path').value.trim();
+  if (!path) { alert('Please enter a project path first.'); return; }
 
-  // Reset UI
-  $("report-section").classList.add("hidden");
-  $("error-card").classList.add("hidden");
-  $("log-section").classList.remove("hidden");
-  $("overall-progress").classList.remove("hidden");
-  $("btn-reset").classList.add("hidden");
-  $("btn-analyze").disabled = true;
-  $("btn-analyze").textContent = "Running…";
-  $("log-terminal").innerHTML = "";
-  logOffset = 0;
-  lastStatus = "idle";
-  [1,2,3,4].forEach(n => { setPhaseCard(n, "idle"); $(`result-${n}`).classList.add("hidden"); });
+  S.logOffset = 0; S.lastStatus = 'idle';
+  S.lastPS = {1:'idle',2:'idle',3:'idle',4:'idle'};
+  S.artifacts = {}; S.srcFiles = {};
+  S.macroColors = {}; S.colorIdx = 0;
+  S.cgData = null; S.cgNodeEls = null; S.cgLinkEls = null;
+  S.deadData = null; S.reportMd = null;
 
-  const r = await fetch("/api/analyze", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ project: path })
+  const waiter = `<div class="waiting-state">
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg>
+    <p>Running…</p></div>`;
+  $i('p1-content').innerHTML = waiter;
+  $i('p2-content').innerHTML = waiter;
+  $i('p3-content').innerHTML = waiter;
+  $i('p4-content').innerHTML = waiter;
+  $i('results-content').innerHTML = waiter;
+  $i('results-headline').innerHTML = 'Running<br/><span>analysis…</span>';
+
+  for (let n=1;n<=4;n++) setTrack(n,'');
+  $i('phase-tracks').style.display = '';
+  $i('log-wrap').style.display = '';
+  $i('log-body').innerHTML = '';
+  $i('error-box').style.display = 'none';
+  $i('btn-reset').style.display = 'none';
+  $i('btn-analyze').disabled = true;
+  $i('btn-analyze').textContent = 'Running…';
+
+  const r = await fetch('/api/analyze', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({project: path}),
   });
   const data = await r.json();
-
   if (!r.ok) {
-    alert(data.error || "Failed to start analysis.");
-    $("btn-analyze").disabled = false;
-    $("btn-analyze").textContent = "▶ Run Analysis";
+    alert(data.error || 'Failed to start.');
+    $i('btn-analyze').disabled = false; $i('btn-analyze').textContent = '▶ Analyze';
     return;
   }
 
-  // Start polling
-  clearInterval(pollTimer);
-  pollTimer = setInterval(poll, 1000);
-  poll(); // immediate first poll
+  clearInterval(S.pollTimer);
+  S.pollTimer = setInterval(poll, 900);
+  poll();
 }
 
 async function useDemo() {
-  const r = await fetch("/api/demo_path").then(r => r.json());
-  $("project-path").value = r.path;
+  const r = await fetch('/api/demo_path').then(r => r.json());
+  $i('project-path').value = r.path;
 }
 
 async function resetJob() {
-  await fetch("/api/reset", { method: "POST" });
-  clearInterval(pollTimer);
-  [1,2,3,4].forEach(n => setPhaseCard(n, "idle"));
-  $("overall-progress").classList.add("hidden");
-  $("log-section").classList.add("hidden");
-  $("report-section").classList.add("hidden");
-  $("error-card").classList.add("hidden");
-  $("btn-reset").classList.add("hidden");
-  $("btn-analyze").disabled = false;
-  $("btn-analyze").textContent = "▶ Run Analysis";
-  $("log-terminal").innerHTML = "";
-  logOffset = 0;
-  lastStatus = "idle";
-}
-
-function toggleHowItWorks() {
-  const c = $("how-content");
-  const a = $("how-arrow");
-  c.classList.toggle("hidden");
-  a.style.transform = c.classList.contains("hidden") ? "" : "rotate(180deg)";
+  await fetch('/api/reset', {method:'POST'});
+  clearInterval(S.pollTimer);
+  $i('btn-analyze').disabled = false; $i('btn-analyze').textContent = '▶ Analyze';
+  $i('btn-reset').style.display = 'none';
+  $i('phase-tracks').style.display = 'none';
+  $i('log-wrap').style.display = 'none';
+  $i('log-body').innerHTML = '';
+  $i('error-box').style.display = 'none';
+  S.logOffset = 0; S.lastStatus = 'idle';
 }
 
 function downloadReport() {
-  if (!reportMdData) return;
-  const a = document.createElement("a");
-  a.href = "data:text/markdown;charset=utf-8," + encodeURIComponent(reportMdData);
-  a.download = "dead_features_report.md";
+  if (!S.reportMd) return;
+  const a = document.createElement('a');
+  a.href = 'data:text/markdown;charset=utf-8,' + encodeURIComponent(S.reportMd);
+  a.download = 'dead_features_report.md';
   a.click();
 }
 
 function copyJSON() {
-  if (!deadFeaturesData) return;
-  navigator.clipboard.writeText(JSON.stringify(deadFeaturesData, null, 2))
-    .then(() => alert("Copied to clipboard!"));
+  if (!S.deadData) return;
+  navigator.clipboard.writeText(JSON.stringify(S.deadData, null, 2))
+    .then(() => alert('JSON copied!'));
 }
+
+// ── Boot: check if analysis already done (run.sh pre-seed) ────────────────────
+(async () => {
+  try {
+    const st = await fetch('/api/status').then(r => r.json());
+    if (st.status === 'done') {
+      if (st.project) $i('project-path').value = st.project;
+      $i('phase-tracks').style.display = '';
+      for (let n=1;n<=4;n++) setTrack(n,'done');
+      await loadArtifacts();
+      for (let n=1;n<=4;n++) await onPhaseComplete(n);
+      S.reportMd = st.report_md;
+      buildResults(st.summary||{}, st.dead_features||[], st.report_md||'');
+    }
+  } catch(_) {}
+})();
 </script>
 </body>
 </html>

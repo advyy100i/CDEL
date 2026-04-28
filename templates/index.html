@@ -597,8 +597,8 @@ body::before {
 .artifact-json {
   background: var(--s1); border: 1px solid var(--bdr); border-radius: 8px;
   font-family: var(--mono); font-size: 11px; color: var(--t3);
-  max-height: 160px; overflow: auto; padding: 12px;
-  scrollbar-width: thin;
+  max-height: 260px; overflow: auto; padding: 12px;
+  scrollbar-width: thin; white-space: pre-wrap; word-break: break-all;
 }
 details > summary { cursor: pointer; font-size: .75rem; color: var(--t3); user-select: none; }
 details > summary:hover { color: var(--t2); }
@@ -1200,12 +1200,26 @@ const PALETTE = [
 
 function $i(id) { return document.getElementById(id); }
 
+// ── Syntax highlight (JSON) ────────────────────────────────────────────────────
+function hlJSON(raw) {
+  return raw
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    .replace(/("(\\u[a-zA-Z0-9]{4}|\\[^u]|[^\\"])*"(\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d*)?(?:[eE][+\-]?\d+)?)/g, m => {
+      if (/^"/.test(m)) return /:$/.test(m)
+        ? `<span style="color:var(--cyan)">${m}</span>`
+        : `<span class="hl-str">${m}</span>`;
+      if (/true|false/.test(m)) return `<span class="hl-pp">${m}</span>`;
+      if (/null/.test(m))       return `<span class="hl-cmt">${m}</span>`;
+      return `<span class="hl-num">${m}</span>`;
+    });
+}
+
 // ── Syntax highlight (minimal C++) ─────────────────────────────────────────────
 function hlCpp(raw) {
   let s = raw.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
   s = s.replace(/(\/\/[^\n]*)$/gm,  '<span class="hl-cmt">$1</span>');
-  s = s.replace(/^(\s*)(#\w+)/,     '$1<span class="hl-pp">$2</span>');
   s = s.replace(/"([^"]*)"/g,        '<span class="hl-str">"$1"</span>');
+  s = s.replace(/^(\s*)(#\w+)/,     '$1<span class="hl-pp">$2</span>');
   s = s.replace(/\b(\d+)\b/g,        '<span class="hl-num">$1</span>');
   s = s.replace(/\b(int|bool|float|double|char|void|auto|const|nullptr|true|false|std|return|if|else|for|while|include)\b/g,'<span class="hl-kw">$1</span>');
   return s;
@@ -1672,22 +1686,33 @@ async function onPhaseComplete(n) {
     </div>
     <p style="font-size:.78rem;color:var(--t3);line-height:1.65">Each row is one build target. The define list tells Phase 04 which <code style="font-family:var(--mono);font-size:.85em">#ifdef</code> branches will ever compile under this target. A macro absent from every row is provably dead.</p>
     <details style="margin-top:10px"><summary>📄 build_config_map.json (raw)</summary>
-      <div class="artifact-json" style="margin-top:8px">${JSON.stringify(S.artifacts.build_config_map,null,2).slice(0,600)}…</div>
+      <div class="artifact-json" style="margin-top:8px">${hlJSON(JSON.stringify(S.artifacts.build_config_map,null,2))}</div>
     </details>`;
   }
 
   if (n === 2 && S.artifacts.ast_mapping) {
-    const files = Object.keys(S.artifacts.ast_mapping.files || {});
-    for (const fp of files) {
-      if (S.srcFiles[fp]) continue;
-      try {
-        const r = await fetch(`/api/source?file=${encodeURIComponent(fp)}`).then(r=>r.json());
-        if (r.lines) S.srcFiles[fp] = r.lines;
-      } catch(_) {}
-    }
-    const container = $i('p2-content');
-    container.innerHTML = '';
-    buildSrcViewer(container, S.artifacts.ast_mapping);
+    const files = S.artifacts.ast_mapping.files || {};
+    const rows = Object.entries(files).map(([fp, blocks]) => {
+      const name   = fp.split('/').pop();
+      const macros = [...new Set((blocks||[]).map(b => b.condition).filter(Boolean))];
+      const tagsHtml = macros.map(m => `<span class="tag accent">${m}</span>`).join(' ') || '<span class="tag">(none)</span>';
+      return `<tr>
+        <td style="font-family:var(--mono);font-size:.72rem;color:var(--t2)">${name}</td>
+        <td>${tagsHtml}</td>
+        <td style="font-family:var(--mono);font-size:.72rem;color:var(--t2);text-align:right">${(blocks||[]).length}</td>
+      </tr>`;
+    }).join('');
+
+    $i('p2-content').innerHTML = `<div class="fade-in glass" style="overflow:hidden">
+      <table class="data-table">
+        <thead><tr><th>Source File</th><th>Macros Found</th><th style="text-align:right"># Blocks</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
+    <p style="font-size:.78rem;color:var(--t3);line-height:1.65">Each row is one scanned file. The macros listed are the <code style="font-family:var(--mono);font-size:.85em">#ifdef</code> conditions the plugin intercepted — with exact start/end line ranges recorded for every branch.</p>
+    <details style="margin-top:10px"><summary>📄 ast_mapping.json (raw)</summary>
+      <div class="artifact-json" style="margin-top:8px">${hlJSON(JSON.stringify(S.artifacts.ast_mapping,null,2))}</div>
+    </details>`;
   }
 
   if (n === 3 && S.artifacts.reachability) {

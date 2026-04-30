@@ -1,0 +1,5 @@
+/Users/user/Documents/Sem VI Notes/CD(CS363IA)/EL/CDEL/tests/demo_project/build-extractor/CMakeFiles/pulsar_core.dir
+/Users/user/Documents/Sem VI Notes/CD(CS363IA)/EL/CDEL/tests/demo_project/build-extractor/CMakeFiles/pulsar_server.dir
+/Users/user/Documents/Sem VI Notes/CD(CS363IA)/EL/CDEL/tests/demo_project/build-extractor/CMakeFiles/pulsar_client.dir
+/Users/user/Documents/Sem VI Notes/CD(CS363IA)/EL/CDEL/tests/demo_project/build-extractor/CMakeFiles/edit_cache.dir
+/Users/user/Documents/Sem VI Notes/CD(CS363IA)/EL/CDEL/tests/demo_project/build-extractor/CMakeFiles/rebuild_cache.dir

@@ -18,7 +18,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 REPO_ROOT = Path(__file__).parent.resolve()
 
@@ -269,6 +269,29 @@ class DeadFeaturePipeline:
 
     # ── Phase 3: LLVM IR reachability ─────────────────────────────────────────
 
+    def _bc_defines_main(self, bc: Path) -> bool:
+        """Return True if this bitcode module defines a 'main' function.
+
+        On macOS symbols have a leading '_' prefix (i.e. '_main').
+        BSD format: <value> <type> <name>  — type 'T' = defined in text section.
+        """
+        llvm_nm = str(Path(self.tools["llvm_link"]).parent / "llvm-nm")
+        try:
+            r = subprocess.run(
+                [llvm_nm, "--format=posix", str(bc)],
+                capture_output=True, text=True,
+            )
+            for line in r.stdout.splitlines():
+                parts = line.split()
+                # posix format: <name> <type> <value> [<size>]
+                # macOS prepends '_'; accept both 'main' and '_main'
+                if len(parts) >= 2 and parts[0] in ("main", "_main") \
+                        and parts[1].upper() == "T":
+                    return True
+        except Exception:
+            pass
+        return False
+
     def run_phase3(self) -> Path:
         if not self.compile_commands:
             raise RuntimeError("Run Phase 1 first")
@@ -280,7 +303,7 @@ class DeadFeaturePipeline:
         if not pass_lib.exists():
             raise RuntimeError(f"DeadFeaturePass plugin not found: {pass_lib}")
 
-        commands  = json.loads(self.compile_commands.read_text())
+        commands = json.loads(self.compile_commands.read_text())
         bc_files: List[Path] = []
         total = len(commands)
 
@@ -305,33 +328,78 @@ class DeadFeaturePipeline:
         if not bc_files:
             raise RuntimeError("Phase 3: no bitcode files generated")
 
-        # Link into whole-program IR
-        wp = self.ir_dir / "whole_program.bc"
-        r = self._run("phase3", [
-            self.tools["llvm_link"],
-            *[str(f) for f in bc_files],
-            "-o", str(wp),
-        ])
-        if r.returncode != 0:
-            raise RuntimeError("llvm-link failed")
-        self._log("phase3", f"Linked {len(bc_files)} bitcode file(s) → whole_program.bc")
+        # ── Separate files that define main() from library/shared files ───────
+        # Projects with multiple executables (e.g. server + client) each have
+        # their own main(). Linking them together causes a "symbol multiply
+        # defined" error. Strategy: one whole-program IR per executable.
+        main_bcs: List[Path] = []
+        lib_bcs:  List[Path] = []
+        for bc in bc_files:
+            (main_bcs if self._bc_defines_main(bc) else lib_bcs).append(bc)
 
-        # Run DeadFeaturePass
+        if main_bcs:
+            self._log("phase3",
+                      f"Found {len(main_bcs)} executable(s) + {len(lib_bcs)} shared file(s) — "
+                      "linking separately to avoid symbol conflicts.")
+            link_groups = [(f"whole_{i}", lib_bcs + [m]) for i, m in enumerate(main_bcs)]
+        else:
+            # Library-only project — link everything together
+            link_groups = [("whole_program", lib_bcs)]
+
+        # ── Link + run pass on each program, merge results ────────────────────
+        merged: Dict[str, Any] = {
+            "reachable_functions": [],
+            "reachable_lines":     {},
+            "function_details":    {},
+            "entry_points":        [],
+        }
+
+        for name, group in link_groups:
+            wp = self.ir_dir / f"{name}.bc"
+            r = self._run("phase3", [
+                self.tools["llvm_link"],
+                *[str(f) for f in group],
+                "-o", str(wp),
+            ])
+            if r.returncode != 0:
+                raise RuntimeError(f"llvm-link failed for {name}")
+            self._log("phase3", f"Linked {len(group)} file(s) → {wp.name}")
+
+            partial = self.output_dir / f"reachability_{name}.json"
+            r = self._run("phase3", [
+                self.tools["opt"],
+                f"--load-pass-plugin={pass_lib}",
+                "--passes=dead-feature-pass",
+                f"--dead-feature-output={partial}",
+                str(wp), "--disable-output",
+            ])
+            if r.returncode != 0:
+                raise RuntimeError(f"DeadFeaturePass failed for {name}")
+
+            data = json.loads(partial.read_text())
+            # Union-merge reachable sets across all programs
+            seen_fns = set(merged["reachable_functions"])
+            for fn in data.get("reachable_functions", []):
+                if fn not in seen_fns:
+                    merged["reachable_functions"].append(fn)
+                    seen_fns.add(fn)
+            seen_ep = set(merged["entry_points"])
+            for fn in data.get("entry_points", []):
+                if fn not in seen_ep:
+                    merged["entry_points"].append(fn)
+                    seen_ep.add(fn)
+            for fp, lines in data.get("reachable_lines", {}).items():
+                existing = set(merged["reachable_lines"].get(fp, []))
+                merged["reachable_lines"][fp] = sorted(existing | set(lines))
+            merged["function_details"].update(data.get("function_details", {}))
+
         reach_out = self.output_dir / "reachability.json"
-        r = self._run("phase3", [
-            self.tools["opt"],
-            f"--load-pass-plugin={pass_lib}",
-            "--passes=dead-feature-pass",
-            f"--dead-feature-output={reach_out}",
-            str(wp), "--disable-output",
-        ])
-        if r.returncode != 0:
-            raise RuntimeError("DeadFeaturePass failed")
-
+        reach_out.write_text(json.dumps(merged, indent=2))
         self.reachability_path = reach_out
-        data = json.loads(reach_out.read_text())
-        n_fn = len(data.get("reachable_functions", []))
-        self._log("phase3", f"✓ Traced {n_fn} reachable function(s)")
+
+        n_fn = len(merged["reachable_functions"])
+        self._log("phase3",
+                  f"✓ Traced {n_fn} reachable function(s) across {len(link_groups)} program(s)")
         return reach_out
 
     # ── Phase 4: Correlate & report ───────────────────────────────────────────

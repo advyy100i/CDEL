@@ -218,7 +218,7 @@ body::before {
 .log-line.lerr { color: #ff6b6b; }
 
 /* ── Input & button ────────────────────────────────────────────────────────── */
-.inp-row { display: flex; gap: 10px; }
+.inp-row { display: flex; gap: 10px; align-items: flex-start; }
 .inp {
   flex: 1; background: var(--s2); border: 1px solid var(--bdr2);
   border-radius: 10px; padding: 13px 16px;
@@ -227,6 +227,36 @@ body::before {
 }
 .inp::placeholder { color: var(--t3); }
 .inp:focus { border-color: var(--cyan); box-shadow: 0 0 0 3px rgba(0,212,255,.08); }
+
+/* ── Path combobox ─────────────────────────────────────────────────────────── */
+.path-combo { flex: 1; display: flex; flex-direction: column; gap: 8px; }
+.path-select-wrap {
+  position: relative; display: flex; align-items: center;
+}
+.path-select-wrap::after {
+  content: '▾';
+  position: absolute; right: 14px; top: 50%; transform: translateY(-50%);
+  color: var(--t2); font-size: .9rem; pointer-events: none;
+}
+.path-select {
+  flex: 1; width: 100%;
+  background: var(--s2); border: 1px solid var(--bdr2);
+  border-radius: 10px; padding: 13px 36px 13px 16px;
+  font-family: var(--mono); font-size: .83rem; color: var(--t1);
+  outline: none; transition: border-color .2s;
+  appearance: none; -webkit-appearance: none; cursor: pointer;
+}
+.path-select:focus { border-color: var(--cyan); box-shadow: 0 0 0 3px rgba(0,212,255,.08); }
+.path-select option { background: #0c1828; color: var(--t1); }
+.path-select option[disabled] { color: var(--t3); font-style: italic; }
+.path-custom-wrap {
+  display: none; position: relative;
+}
+.path-custom-wrap.visible { display: flex; align-items: center; gap: 8px; }
+.path-custom-hint {
+  font-family: var(--mono); font-size: .72rem; color: var(--t3);
+  margin-top: -2px;
+}
 .btn-primary {
   background: var(--cyan); color: #04080f;
   font-family: var(--display); font-weight: 700; font-size: .85rem;
@@ -715,11 +745,21 @@ details > summary:hover { color: var(--t2); }
 
       <div class="slide-content">
         <div class="inp-row">
-          <input id="project-path" class="inp" type="text" placeholder="Absolute path to your CMake project…" autocomplete="off" spellcheck="false"/>
+          <div class="path-combo">
+            <div class="path-select-wrap">
+              <select id="project-select" class="path-select" onchange="onPathSelect()">
+                <option value="" disabled selected>Loading projects…</option>
+              </select>
+            </div>
+            <div id="custom-path-wrap" class="path-custom-wrap">
+              <input id="project-path" class="inp" type="text"
+                placeholder="Absolute path to your CMake project…"
+                autocomplete="off" spellcheck="false"/>
+            </div>
+          </div>
           <button id="btn-analyze" class="btn-primary" onclick="startAnalysis()">▶ Analyze</button>
         </div>
         <div style="display:flex;align-items:center;gap:12px;margin-top:-4px">
-          <button class="btn-ghost" onclick="useDemo()">🧪 Use built-in demo</button>
           <button id="btn-reset" class="btn-ghost" style="display:none" onclick="resetJob()">↺ Reset</button>
         </div>
 
@@ -1737,7 +1777,9 @@ async function onPhaseComplete(n) {
       </div>`);
 
     try {
-      const cg = await fetch('/api/callgraph').then(r => r.json());
+      const proj = getSelectedPath();
+      const cgQs = proj ? '?project=' + encodeURIComponent(proj) : '';
+      const cg = await fetch('/api/callgraph' + cgQs).then(r => r.json());
       if (cg.nodes?.length) buildCallGraph(container, cg);
     } catch(_) {}
   }
@@ -1798,8 +1840,8 @@ async function poll() {
 
 // ── Actions ────────────────────────────────────────────────────────────────────
 async function startAnalysis() {
-  const path = $i('project-path').value.trim();
-  if (!path) { alert('Please enter a project path first.'); return; }
+  const path = getSelectedPath();
+  if (!path) { alert('Please select or enter a project path first.'); return; }
 
   S.logOffset = 0; S.lastStatus = 'idle';
   S.lastPS = {1:'idle',2:'idle',3:'idle',4:'idle'};
@@ -1843,9 +1885,121 @@ async function startAnalysis() {
   poll();
 }
 
+async function loadKnownProjects() {
+  const sel = $i('project-select');
+  try {
+    const r = await fetch('/api/known_projects').then(r => r.json());
+    sel.innerHTML = '';
+    if (r.projects.length === 0) {
+      sel.innerHTML = '<option value="" disabled selected>No projects found</option>';
+    } else {
+      r.projects.forEach((p, i) => {
+        const opt = document.createElement('option');
+        opt.value = p.path;
+        opt.textContent = p.label + '   —   ' + p.path;
+        if (i === 0) opt.selected = true;
+        sel.appendChild(opt);
+      });
+    }
+    // Add custom path option at the bottom
+    const sep = document.createElement('option');
+    sep.disabled = true;
+    sep.textContent = '──────────────────────────';
+    sel.appendChild(sep);
+    const custom = document.createElement('option');
+    custom.value = '__custom__';
+    custom.textContent = 'Enter custom path…';
+    sel.appendChild(custom);
+
+    onPathSelect();
+  } catch(e) {
+    sel.innerHTML = '<option value="__custom__">Enter custom path…</option>';
+    onPathSelect();
+  }
+}
+
+function onPathSelect() {
+  const sel = $i('project-select');
+  const wrap = $i('custom-path-wrap');
+  if (sel.value === '__custom__') {
+    wrap.classList.add('visible');
+    $i('project-path').focus();
+  } else {
+    wrap.classList.remove('visible');
+    // Immediately load any cached results for this project
+    loadProjectArtifacts(sel.value);
+  }
+}
+
+async function loadProjectArtifacts(projectPath) {
+  if (!projectPath || projectPath === '__custom__') return;
+  const qs = '?project=' + encodeURIComponent(projectPath);
+  try {
+    const [arts, rep] = await Promise.all([
+      fetch('/api/artifacts' + qs).then(r => r.json()),
+      fetch('/api/report'    + qs).then(r => r.json()),
+    ]);
+
+    const hasData = Object.keys(arts).length > 0;
+    if (!hasData) {
+      // No cached results — clear slides so they don't show stale data
+      clearSlideContent();
+      return;
+    }
+
+    // Seed global state
+    S.artifacts = arts;
+    S.deadData  = arts.dead_features || null;
+    S.reportMd  = rep.report_md || '';
+
+    // Show phase track bars as done for whichever phases have data
+    const phaseArtifacts = ['build_config_map','ast_mapping','reachability','dead_features'];
+    $i('phase-tracks').style.display = '';
+    phaseArtifacts.forEach((key, i) => setTrack(i + 1, arts[key] ? 'done' : 'idle'));
+
+    // Populate each phase slide
+    for (let n = 1; n <= 4; n++) {
+      if (arts[phaseArtifacts[n - 1]]) await onPhaseComplete(n);
+    }
+
+    // Populate results slide
+    if (arts.dead_features) {
+      const summary = arts.dead_features.summary || {};
+      buildResults(summary, arts.dead_features.dead_features || [], S.reportMd);
+    }
+  } catch(e) {
+    console.warn('loadProjectArtifacts:', e);
+  }
+}
+
+function clearSlideContent() {
+  const ids = ['p1-content','p2-content','p3-content','p4-content','results-content'];
+  ids.forEach(id => {
+    const el = $i(id);
+    if (el) el.innerHTML = '<p style="color:var(--t3);font-size:.85rem">No previous results for this project. Click ▶ Analyze to run.</p>';
+  });
+  $i('phase-tracks').style.display = 'none';
+  $i('results-headline').innerHTML = 'Select a project<br/><span>and Analyze</span>';
+}
+
+function getSelectedPath() {
+  const sel = $i('project-select');
+  if (sel.value === '__custom__') {
+    return $i('project-path').value.trim();
+  }
+  return sel.value.trim();
+}
+
 async function useDemo() {
-  const r = await fetch('/api/demo_path').then(r => r.json());
-  $i('project-path').value = r.path;
+  // Select first non-custom option (the built-in demo)
+  const sel = $i('project-select');
+  for (const opt of sel.options) {
+    if (opt.value && opt.value !== '__custom__' && !opt.disabled) {
+      sel.value = opt.value;
+      onPathSelect();
+      break;
+    }
+  }
 }
 
 async function resetJob() {
@@ -1874,19 +2028,33 @@ function copyJSON() {
     .then(() => alert('JSON copied!'));
 }
 
-// ── Boot: check if analysis already done (run.sh pre-seed) ────────────────────
+// ── Boot ───────────────────────────────────────────────────────────────────────
 (async () => {
+  // Populate the project dropdown before anything else
+  await loadKnownProjects();
+
   try {
     const st = await fetch('/api/status').then(r => r.json());
-    if (st.status === 'done') {
-      if (st.project) $i('project-path').value = st.project;
-      $i('phase-tracks').style.display = '';
-      for (let n=1;n<=4;n++) setTrack(n,'done');
-      await loadArtifacts();
-      for (let n=1;n<=4;n++) await onPhaseComplete(n);
-      S.reportMd = st.report_md;
-      buildResults(st.summary||{}, st.dead_features||[], st.report_md||'');
+
+    // Sync the dropdown to whatever project was last active
+    if (st.project) {
+      const sel = $i('project-select');
+      let matched = false;
+      for (const opt of sel.options) {
+        if (opt.value === st.project) { sel.value = st.project; matched = true; break; }
+      }
+      if (!matched) {
+        sel.value = '__custom__';
+        $i('project-path').value = st.project;
+        // Don't call onPathSelect here — we handle data load below
+        $i('custom-path-wrap').classList.add('visible');
+      }
     }
+
+    // Load artifacts for the active project (covers pre-seeded runs)
+    const activePath = st.project || getSelectedPath();
+    if (activePath) await loadProjectArtifacts(activePath);
+
   } catch(_) {}
 })();
 </script>

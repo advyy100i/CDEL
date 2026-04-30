@@ -1,0 +1,2 @@
+/usr/bin/ar qc libpulsar_core.a CMakeFiles/pulsar_core.dir/src/connection.cpp.o CMakeFiles/pulsar_core.dir/src/protocol.cpp.o CMakeFiles/pulsar_core.dir/src/metrics.cpp.o CMakeFiles/pulsar_core.dir/src/crypto.cpp.o CMakeFiles/pulsar_core.dir/src/scheduler.cpp.o
+/usr/bin/ranlib libpulsar_core.a

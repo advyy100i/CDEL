@@ -1,0 +1,44 @@
+[
+{
+  "directory": "/Users/user/Documents/Sem VI Notes/CD(CS363IA)/EL/CDEL/tests/demo_project/build-extractor",
+  "command": "/usr/bin/c++ -DENABLE_METRICS=1 -DENABLE_TLS=1 -DPULSAR_CORE_BUILD=1 -I\"/Users/user/Documents/Sem VI Notes/CD(CS363IA)/EL/CDEL/tests/demo_project/include\" -std=gnu++17 -arch arm64 -o CMakeFiles/pulsar_core.dir/src/connection.cpp.o -c \"/Users/user/Documents/Sem VI Notes/CD(CS363IA)/EL/CDEL/tests/demo_project/src/connection.cpp\"",
+  "file": "/Users/user/Documents/Sem VI Notes/CD(CS363IA)/EL/CDEL/tests/demo_project/src/connection.cpp",
+  "output": "CMakeFiles/pulsar_core.dir/src/connection.cpp.o"
+},
+{
+  "directory": "/Users/user/Documents/Sem VI Notes/CD(CS363IA)/EL/CDEL/tests/demo_project/build-extractor",
+  "command": "/usr/bin/c++ -DENABLE_METRICS=1 -DENABLE_TLS=1 -DPULSAR_CORE_BUILD=1 -I\"/Users/user/Documents/Sem VI Notes/CD(CS363IA)/EL/CDEL/tests/demo_project/include\" -std=gnu++17 -arch arm64 -o CMakeFiles/pulsar_core.dir/src/protocol.cpp.o -c \"/Users/user/Documents/Sem VI Notes/CD(CS363IA)/EL/CDEL/tests/demo_project/src/protocol.cpp\"",
+  "file": "/Users/user/Documents/Sem VI Notes/CD(CS363IA)/EL/CDEL/tests/demo_project/src/protocol.cpp",
+  "output": "CMakeFiles/pulsar_core.dir/src/protocol.cpp.o"
+},
+{
+  "directory": "/Users/user/Documents/Sem VI Notes/CD(CS363IA)/EL/CDEL/tests/demo_project/build-extractor",
+  "command": "/usr/bin/c++ -DENABLE_METRICS=1 -DENABLE_TLS=1 -DPULSAR_CORE_BUILD=1 -I\"/Users/user/Documents/Sem VI Notes/CD(CS363IA)/EL/CDEL/tests/demo_project/include\" -std=gnu++17 -arch arm64 -o CMakeFiles/pulsar_core.dir/src/metrics.cpp.o -c \"/Users/user/Documents/Sem VI Notes/CD(CS363IA)/EL/CDEL/tests/demo_project/src/metrics.cpp\"",
+  "file": "/Users/user/Documents/Sem VI Notes/CD(CS363IA)/EL/CDEL/tests/demo_project/src/metrics.cpp",
+  "output": "CMakeFiles/pulsar_core.dir/src/metrics.cpp.o"
+},
+{
+  "directory": "/Users/user/Documents/Sem VI Notes/CD(CS363IA)/EL/CDEL/tests/demo_project/build-extractor",
+  "command": "/usr/bin/c++ -DENABLE_METRICS=1 -DENABLE_TLS=1 -DPULSAR_CORE_BUILD=1 -I\"/Users/user/Documents/Sem VI Notes/CD(CS363IA)/EL/CDEL/tests/demo_project/include\" -std=gnu++17 -arch arm64 -o CMakeFiles/pulsar_core.dir/src/crypto.cpp.o -c \"/Users/user/Documents/Sem VI Notes/CD(CS363IA)/EL/CDEL/tests/demo_project/src/crypto.cpp\"",
+  "file": "/Users/user/Documents/Sem VI Notes/CD(CS363IA)/EL/CDEL/tests/demo_project/src/crypto.cpp",
+  "output": "CMakeFiles/pulsar_core.dir/src/crypto.cpp.o"
+},
+{
+  "directory": "/Users/user/Documents/Sem VI Notes/CD(CS363IA)/EL/CDEL/tests/demo_project/build-extractor",
+  "command": "/usr/bin/c++ -DENABLE_METRICS=1 -DENABLE_TLS=1 -DPULSAR_CORE_BUILD=1 -I\"/Users/user/Documents/Sem VI Notes/CD(CS363IA)/EL/CDEL/tests/demo_project/include\" -std=gnu++17 -arch arm64 -o CMakeFiles/pulsar_core.dir/src/scheduler.cpp.o -c \"/Users/user/Documents/Sem VI Notes/CD(CS363IA)/EL/CDEL/tests/demo_project/src/scheduler.cpp\"",
+  "file": "/Users/user/Documents/Sem VI Notes/CD(CS363IA)/EL/CDEL/tests/demo_project/src/scheduler.cpp",
+  "output": "CMakeFiles/pulsar_core.dir/src/scheduler.cpp.o"
+},
+{
+  "directory": "/Users/user/Documents/Sem VI Notes/CD(CS363IA)/EL/CDEL/tests/demo_project/build-extractor",
+  "command": "/usr/bin/c++ -DENABLE_METRICS=1 -DENABLE_TLS=1 -DPULSAR_SERVER_BUILD=1 -I\"/Users/user/Documents/Sem VI Notes/CD(CS363IA)/EL/CDEL/tests/demo_project/include\" -std=gnu++17 -arch arm64 -o CMakeFiles/pulsar_server.dir/src/server_main.cpp.o -c \"/Users/user/Documents/Sem VI Notes/CD(CS363IA)/EL/CDEL/tests/demo_project/src/server_main.cpp\"",
+  "file": "/Users/user/Documents/Sem VI Notes/CD(CS363IA)/EL/CDEL/tests/demo_project/src/server_main.cpp",
+  "output": "CMakeFiles/pulsar_server.dir/src/server_main.cpp.o"
+},
+{
+  "directory": "/Users/user/Documents/Sem VI Notes/CD(CS363IA)/EL/CDEL/tests/demo_project/build-extractor",
+  "command": "/usr/bin/c++ -DENABLE_METRICS=1 -DENABLE_TLS=1 -DPULSAR_CLIENT_BUILD=1 -I\"/Users/user/Documents/Sem VI Notes/CD(CS363IA)/EL/CDEL/tests/demo_project/include\" -std=gnu++17 -arch arm64 -o CMakeFiles/pulsar_client.dir/src/client_main.cpp.o -c \"/Users/user/Documents/Sem VI Notes/CD(CS363IA)/EL/CDEL/tests/demo_project/src/client_main.cpp\"",
+  "file": "/Users/user/Documents/Sem VI Notes/CD(CS363IA)/EL/CDEL/tests/demo_project/src/client_main.cpp",
+  "output": "CMakeFiles/pulsar_client.dir/src/client_main.cpp.o"
+}
+]

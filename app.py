@@ -20,8 +20,14 @@ from typing import Any, Dict, Optional
 from flask import Flask, jsonify, render_template, request, Response
 
 REPO_ROOT = Path(__file__).parent.resolve()
-DEMO_PROJECT = str(REPO_ROOT / "tests" / "dummy_project")
+DEMO_PROJECT = str(REPO_ROOT / "tests" / "demo_project")
 DEFAULT_OUTPUT = str(REPO_ROOT / "tests" / "artifacts" / "pipeline-out")
+
+
+def _project_output_dir(project: str) -> Path:
+    """Return a stable, per-project artifact directory under pipeline-out/."""
+    safe = re.sub(r"[^a-zA-Z0-9_.-]", "_", Path(project).name)
+    return REPO_ROOT / "tests" / "artifacts" / "pipeline-out" / safe
 
 app = Flask(__name__, template_folder=str(REPO_ROOT / "templates"))
 
@@ -156,7 +162,7 @@ def api_analyze():
 
     body       = request.get_json(silent=True) or {}
     project    = body.get("project", "").strip() or DEMO_PROJECT
-    output_dir = body.get("output_dir", "").strip() or DEFAULT_OUTPUT
+    output_dir = body.get("output_dir", "").strip() or str(_project_output_dir(project))
 
     if not Path(project).exists():
         return jsonify({"error": f"Project path not found: {project}"}), 400
@@ -209,16 +215,54 @@ def api_demo_path():
     return jsonify({"path": DEMO_PROJECT})
 
 
+@app.route("/api/known_projects")
+def api_known_projects():
+    """Return a list of known/discoverable CMake projects for the path dropdown."""
+    projects = []
+
+    # Built-in projects shipped with the tool
+    builtins = [
+        ("PulsarNet demo  (built-in)", REPO_ROOT / "tests" / "demo_project"),
+        ("Dummy project   (built-in)", REPO_ROOT / "tests" / "dummy_project"),
+    ]
+    for label, p in builtins:
+        if (p / "CMakeLists.txt").exists():
+            projects.append({"label": label, "path": str(p)})
+
+    # Scan one level above REPO_ROOT for sibling CMake projects
+    parent = REPO_ROOT.parent
+    try:
+        for sibling in sorted(parent.iterdir()):
+            if sibling == REPO_ROOT:
+                continue
+            if (sibling / "CMakeLists.txt").exists():
+                projects.append({"label": sibling.name, "path": str(sibling)})
+    except PermissionError:
+        pass
+
+    return jsonify({"projects": projects})
+
+
 @app.route("/api/artifacts")
 def api_artifacts():
-    """Return all four pipeline artifacts if they exist."""
-    with _lock:
-        output_dir = Path(_job.get("output_dir") or DEFAULT_OUTPUT)
+    """Return all four pipeline artifacts.
+
+    Optional query param ?project=<path> reads from that project's
+    per-project output dir instead of the currently active job's dir.
+    This lets the frontend sync slides when the user switches the dropdown.
+    """
+    project_q = request.args.get("project", "").strip()
+    if project_q:
+        output_dir = _project_output_dir(project_q)
+    else:
+        with _lock:
+            output_dir = Path(_job.get("output_dir") or DEFAULT_OUTPUT)
+
     result: Dict[str, Any] = {}
     for key, fname in [("build_config_map", "build_config_map.json"),
-                        ("ast_mapping", "ast_mapping.json"),
-                        ("reachability", "reachability.json"),
-                        ("dead_features", "dead_features.json")]:
+                        ("ast_mapping",      "ast_mapping.json"),
+                        ("reachability",     "reachability.json"),
+                        ("dead_features",    "dead_features.json")]:
         p = output_dir / fname
         if p.exists():
             try:
@@ -228,14 +272,31 @@ def api_artifacts():
     return jsonify(result)
 
 
+@app.route("/api/report")
+def api_report():
+    """Return the Markdown report for a given project (or the active job)."""
+    project_q = request.args.get("project", "").strip()
+    if project_q:
+        output_dir = _project_output_dir(project_q)
+    else:
+        with _lock:
+            output_dir = Path(_job.get("output_dir") or DEFAULT_OUTPUT)
+
+    p = output_dir / "report.md"
+    if p.exists():
+        return jsonify({"report_md": p.read_text(errors="replace")})
+    return jsonify({"report_md": ""})
+
+
 @app.route("/api/source")
 def api_source():
     """Serve a source file that belongs to the active project."""
     file_path = request.args.get("file", "").strip()
     if not file_path:
         return jsonify({"error": "No file specified"}), 400
+    project_q = request.args.get("project", "").strip()
     with _lock:
-        project = _job.get("project") or DEMO_PROJECT
+        project = project_q or _job.get("project") or DEMO_PROJECT
     try:
         resolved = Path(file_path).resolve()
         resolved.relative_to(Path(project).resolve())
@@ -251,9 +312,11 @@ def api_source():
 @app.route("/api/callgraph")
 def api_callgraph():
     """Build simplified call graph from Phase 3 data."""
+    project_q  = request.args.get("project", "").strip()
     with _lock:
-        output_dir = Path(_job.get("output_dir") or DEFAULT_OUTPUT)
-        project    = _job.get("project") or DEMO_PROJECT
+        project    = project_q or _job.get("project") or DEMO_PROJECT
+        output_dir = _project_output_dir(project) if project_q else \
+                     Path(_job.get("output_dir") or DEFAULT_OUTPUT)
 
     reach_path = output_dir / "reachability.json"
     if not reach_path.exists():

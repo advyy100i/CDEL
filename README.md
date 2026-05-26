@@ -1,11 +1,22 @@
-# Assignment 29: Dead Feature Detector
+# Dead Feature Detector
 
-A whole-program LLVM/Clang analysis tool that identifies code regions guarded by preprocessor flags that are **unreachable under any actual build configuration**. Traditional dead-code elimination works per translation unit; this tool combines build-system-level configuration analysis with IR-level reachability to find feature-guarded blocks that are dead **across all real configurations**.
+A whole-program LLVM/Clang analysis tool that finds `#ifdef`-guarded code regions that are **unreachable under every actual build configuration** — combining build-system configuration analysis, Clang preprocessor instrumentation, and LLVM IR call-graph reachability into a single automated pipeline.
 
 ---
-## Screen Recording (Demo)
+
+## Demo
 
 <video src="https://github.com/user-attachments/assets/3996d06f-d5fe-4dfe-b427-41339877e08f" width="100%" autoplay muted loop></video>
+
+---
+
+## Documentation
+
+| Document | Contents |
+|----------|----------|
+| [DESIGN.md](DESIGN.md) | Problem framing, approach rationale, alternatives compared |
+| [IMPLEMENTATION.md](IMPLEMENTATION.md) | LLVM/Clang plugin internals, BFS pass, correlator logic |
+| [EVALUATION.md](EVALUATION.md) | Metrics, 3-way baseline comparison, 30 annotated test cases |
 
 ---
 
@@ -21,7 +32,7 @@ flowchart TD
     end
 
     subgraph P2["Phase 2 · IfdefMapper Clang Plugin"]
-        E[Clang PPCallbacks\nIfdef / Ifndef / If / Elif / Else / Endif] --> F[ast_mapping.json\n#ifdef block → file, lines, macro]
+        E[Clang PPCallbacks\nIfdef / Ifndef / If / Elif / Else / Endif] --> F[ast_mapping.json\n#ifdef block → file · lines · macro]
     end
 
     subgraph P3["Phase 3 · DeadFeaturePass LLVM Pass"]
@@ -43,430 +54,229 @@ flowchart TD
     D --> K
     F --> K
     J --> K
-
     O --> UI[Web UI · app.py\nInteractive results explorer]
 ```
-
----
-
-## Phase Status
-
-| Phase | Component | Status |
-|-------|-----------|--------|
-| 1 | CMake define extractor (`extractor/extractor.py`) | ✅ Complete |
-| 2 | Clang preprocessor plugin (`llvm-pass/IfdefMapper`) | ✅ Complete |
-| 3 | LLVM whole-program reachability pass (`llvm-pass/DeadFeaturePass`) | ✅ Complete |
-| 4 | Correlation engine & Markdown reporter (`correlator.py`) | ✅ Complete |
-| 5 | Evaluation on `zlib` / `sqlite` | 🔲 Planned |
 
 ---
 
 ## Quickstart
 
 ```bash
-# Run the full pipeline + open the interactive web UI (default: demo project)
-bash run.sh
+# Step 1 — Build LLVM plugins (requires Homebrew LLVM)
+bash build.sh
 
-# Custom project
-bash run.sh /path/to/cmake/project
-
-# Custom project + output dir + port
-bash run.sh /path/to/cmake/project /tmp/dfd-out 8080
+# Step 2 — Run full pipeline + open interactive web UI
+bash run.sh                                  # demo project (PulsarNet)
+bash run.sh /path/to/cmake/project           # custom project
+bash run.sh /path/to/project /tmp/out 8080   # custom output dir + port
 
 # Pipeline only (no browser)
-NO_UI=1 bash run.sh /path/to/cmake/project
+NO_UI=1 bash run.sh /path/to/project
 
-# Custom llvm-config
+# Custom LLVM installation
 LLVM_CONFIG=/opt/homebrew/opt/llvm/bin/llvm-config bash run.sh
 ```
 
-`run.sh` installs Flask if needed, runs `pipeline.py` headlessly, then launches `app.py` pre-loaded with the results.
-
 ---
 
-## Phase 1: Build Configuration Extractor
+## Design
 
-### What it does
+> Full rationale, alternatives, and decision table: **[DESIGN.md](DESIGN.md)**
 
-`extractor/extractor.py` takes a CMake project, forces a CMake configure with
-`-DCMAKE_EXPORT_COMPILE_COMMANDS=ON`, parses `compile_commands.json`, and emits
-a JSON file mapping each CMake target to the exact `-D` preprocessor flags used
-to compile it.
-
-Falls back to a **fake no-op compiler** (`fake-cxx.sh` / `fake-cxx.cmd`) written
-into the build directory when no real C++ toolchain is present, allowing
-metadata-only extraction without a full toolchain.
-
-### Internal flow
-
-```mermaid
-flowchart LR
-    A[CMakeLists.txt] -->|cmake -DCMAKE_EXPORT_COMPILE_COMMANDS=ON| B[compile_commands.json]
-    B -->|parse_arguments\nextract_defines\ninfer_target_name| C[per-target define map]
-    C --> D[build_config_map.json]
-```
-
-### Usage
-
-```bash
-python3 extractor/extractor.py \
-  --project <path/to/cmake/project> \
-  --output  <path/to/output.json> \
-  [--build-dir <build-dir>]      # default: <project>/build-extractor
-  [--cmake-bin <cmake-path>]     # default: cmake on PATH
-  [--verbose]
-```
-
-### Tests
-
-```bash
-bash tests/run_phase1_test.sh                                     # macOS / Linux
-powershell -ExecutionPolicy Bypass -File .\tests\run_phase1_test.ps1  # Windows
-```
-
-### Output format (`build_config_map.json`)
-
-```json
-{
-  "generated_at": "<ISO-8601 UTC>",
-  "project_root": "/abs/path/to/project",
-  "build_dir":    "/abs/path/to/build",
-  "targets": {
-    "dummy_core": {
-      "defines": ["CORE_BUILD=1", "EXPERIMENTAL_FEATURE=1"],
-      "files": [
-        { "source": "/abs/path/feature.cpp", "defines": ["CORE_BUILD=1", "EXPERIMENTAL_FEATURE=1"] }
-      ]
-    }
-  }
-}
-```
-
----
-
-## Phase 2: Clang Preprocessor Plugin (IfdefMapper)
-
-`llvm-pass/IfdefMapper/` — a Clang plugin using `PPCallbacks` to record every
-`#ifdef` / `#ifndef` / `#if` conditional block with source file, line range,
-macro condition, and branch structure (`#else` / `#elif` arms).
-
-### Internal flow
-
-```mermaid
-flowchart LR
-    A[source.cpp] -->|clang++ -add-plugin ifdef-mapper| B[PPCallbacks\nIfdef · Ifndef · If\nElif · Else · Endif]
-    B -->|stack machine| C[block tree]
-    C -->|HandleTranslationUnit| D[ast_mapping.json]
-    B -->|SM.isInSystemHeader| E[skip + push sentinel\nstays aligned]
-```
-
-> System-header `#ifdef`s are skipped via `SM.isInSystemHeader()`. Each skipped block pushes a sentinel frame so `Endif` stays aligned.
->
-> **LLVM 22 invocation note:** use `-add-plugin`, not `-plugin`. Our plugin type is `CmdlineBeforeMainAction`; `-plugin` requires `ReplaceAction`.
-
-### Build
-
-```bash
-bash llvm-pass/IfdefMapper/build.sh
-```
-
-### Test
-
-```bash
-bash tests/run_phase2_test.sh
-```
-
-### Run manually on a single file
-
-```bash
-/opt/homebrew/opt/llvm/bin/clang++ \
-  -Xclang -load -Xclang llvm-pass/IfdefMapper/build/IfdefMapper.so \
-  -Xclang -add-plugin -Xclang ifdef-mapper \
-  -Xclang -plugin-arg-ifdef-mapper -Xclang output=ast_mapping.json \
-  -std=c++17 -fsyntax-only <source.cpp>
-```
-
-### Output format (`ast_mapping.json`)
-
-```json
-{
-  "tool": "IfdefMapper",
-  "files": {
-    "/abs/path/feature.cpp": [
-      {
-        "kind": "ifdef",
-        "condition": "EXPERIMENTAL_FEATURE",
-        "start_line": 4,
-        "end_line": 8,
-        "branches": [
-          { "kind": "ifdef", "condition": "EXPERIMENTAL_FEATURE", "start_line": 4, "end_line": 7 }
-        ]
-      }
-    ]
-  }
-}
-```
-
----
-
-## Phase 3: LLVM Whole-Program Reachability Pass (DeadFeaturePass)
-
-`llvm-pass/DeadFeaturePass/` — new-pass-manager LLVM Module pass. Takes whole-program LLVM IR, performs call-graph BFS from `main` + all exported symbols, and maps reachable basic blocks to source line numbers via debug info.
-
-### Internal flow
+The fundamental challenge is that neither the source AST nor compiled IR alone is sufficient:
 
 ```mermaid
 flowchart TD
-    A[source TUs] -->|clang++ -g -emit-llvm -c| B[per-TU .bc files]
-    B -->|llvm-link| C[whole_program.bc]
-    C -->|opt --load-pass-plugin=DeadFeaturePass.so| D
+    GOAL["Find dead #ifdef code across all build configs"] --> Q1
 
-    subgraph BFS["BFS reachability"]
-        D[seed: main + ExternalLinkage non-decls]
-        D --> E{indirect call?}
-        E -->|yes| F[add all address-taken fns]
-        F --> D
-        E -->|no| G[mark reachable]
-    end
+    Q1{"Which -D flags does\neach file actually see?"}
+    Q1 -->|"grep CMakeLists"| GREP_BAD["❌ Imprecise — misses\nper-target distinctions\nand per-file filtering"]
+    Q1 -->|"Parse compile_commands.json"| P1_OK["✅ Phase 1\nExact per-target defines\nper source file"]
 
-    G -->|DILocation getLine\nDIFile getDirectory/getFilename| H[reachability.json\nreachable_lines per file]
+    P1_OK --> Q2{"Locate #ifdef blocks\nwith line ranges?"}
+    Q2 -->|"grep source"| GREP2_BAD["❌ No branch structure,\nno line ranges, misses #else arms"]
+    Q2 -->|"Clang PPCallbacks plugin"| P2_OK["✅ Phase 2\nExact #ifdef locations,\nbranch tree, macro conditions"]
+
+    P2_OK --> Q3{"Is the guarded code\nactually called at runtime?"}
+    Q3 -->|"AST only"| AST_BAD["❌ #ifdef text is erased\nbefore AST is built"]
+    Q3 -->|"LTO IR + BFS"| P3_OK["✅ Phase 3\nWhole-program call graph,\nDILocation line mapping"]
+
+    P3_OK --> P4["✅ Phase 4\nCorrelate → confidence levels\n→ LoC counts → report"]
 ```
 
-### Build
-
-```bash
-bash llvm-pass/DeadFeaturePass/build.sh
-```
-
-### Test
-
-```bash
-bash tests/run_phase3_test.sh
-```
-
-### Run manually
-
-```bash
-# 1. Compile sources to LLVM bitcode with debug info
-clang++ -g -std=c++17 -DEXPERIMENTAL_FEATURE=1 -emit-llvm -c feature.cpp -o feature.bc
-clang++ -g -std=c++17 -emit-llvm -c main.cpp -o main.bc
-
-# 2. Link to whole-program IR
-llvm-link feature.bc main.bc -o whole_program.bc
-
-# 3. Run the pass
-opt --load-pass-plugin=./DeadFeaturePass.so \
-    --passes="dead-feature-pass" \
-    --dead-feature-output=reachability.json \
-    whole_program.bc --disable-output
-```
-
-### Output format (`reachability.json`)
-
-```json
-{
-  "tool": "DeadFeaturePass",
-  "entry_points": ["main", "_Z12feature_namev"],
-  "reachable_functions": ["main", "_Z12feature_namev", "_Z13feature_valueb"],
-  "unreachable_functions": [],
-  "reachable_lines": {
-    "/abs/path/feature.cpp": [5, 6, 13, 15, 19]
-  },
-  "function_details": { "...": "..." }
-}
-```
-
-### Conservative indirect-call handling
-
-If any reachable function makes an indirect call (function pointer), all
-address-taken functions in the module are added to the reachable set and BFS
-continues from them.
-
----
-
-## Phase 4: Correlation Engine (`correlator.py`)
-
-`correlator.py` at the repo root joins all three data sources.
-
-### Decision logic
-
-```mermaid
-flowchart TD
-    A[for each #ifdef block in ast_mapping.json] --> B[look up all build targets\nthat compile this file]
-    B --> C{defined in\nall configs?}
-    C -->|yes| SKIP[skip — always compiled]
-    C -->|no| D{any line\nin reachable_lines?}
-    D -->|yes in some config| MEDIUM[MEDIUM — compiled\nbut not IR-reached]
-    D -->|no in all configs| HIGH[HIGH — never compiled\nin any config]
-```
-
-**Per-file config filtering** is critical: `build_file_config_sets()` maps each source file to only the build targets that compile it. Using all configs globally would cause false negatives — e.g. a target that doesn't define `EXPERIMENTAL_FEATURE` but also doesn't compile `feature.cpp` would mask a legitimate HIGH-confidence finding.
-
-### Run
-
-```bash
-python3 correlator.py \
-  --config-map   tests/artifacts/build_config_map.json \
-  --ast-mapping  tests/artifacts/ast_mapping.json \
-  --reachability tests/artifacts/reachability.json \
-  --report       report.md \
-  --json-out     tests/artifacts/dead_features.json \
-  --project-root .
-```
-
-Or: `bash tests/run_phase4_test.sh`
-
-### Output (`dead_features.json`)
-
-```json
-{
-  "summary": { "total": 2, "high": 1, "medium": 1, "high_loc_removable": 4 },
-  "dead_features": [
-    {
-      "macro": "EXPERIMENTAL_FEATURE",
-      "file": "/abs/path/feature.cpp",
-      "start_line": 4, "end_line": 8,
-      "confidence": "HIGH",
-      "loc_removable": 4,
-      "reason": "Branch not defined in any build configuration"
-    }
-  ]
-}
-```
-
----
-
-## Pipeline Orchestrator (`pipeline.py`)
-
-`pipeline.py` wraps all four phases into a single `DeadFeaturePipeline` class usable both from the CLI and from the web UI.
-
-### Architecture
-
-```mermaid
-classDiagram
-    class DeadFeaturePipeline {
-        +project_path: Path
-        +output_dir: Path
-        +tools: Dict[str, str]
-        +ensure_plugins_built()
-        +run_phase1() Path
-        +run_phase2() Path
-        +run_phase3() Path
-        +run_phase4() Path
-        +run_all() dict
-    }
-
-    class ToolDiscovery {
-        +find_llvm_config() str
-        +llvm_bindir(llvm_config) str
-        +discover_tools() Dict
-        +plugin_path(name) Path
-    }
-
-    DeadFeaturePipeline --> ToolDiscovery : uses
-    DeadFeaturePipeline --> "extractor.py" : subprocess
-    DeadFeaturePipeline --> "IfdefMapper.so" : subprocess clang++
-    DeadFeaturePipeline --> "DeadFeaturePass.so" : subprocess opt
-    DeadFeaturePipeline --> "correlator.py" : subprocess
-```
-
-### CLI usage
-
-```bash
-python3 pipeline.py --project tests/dummy_project
-python3 pipeline.py --project /path/to/cmake/project --output-dir /tmp/dfd-out
-python3 pipeline.py --project /path/to/cmake/project --llvm-config /opt/homebrew/opt/llvm/bin/llvm-config
-```
-
-LLVM tools are auto-discovered via `llvm-config`. Plugins are built automatically on first run if `.so` / `.dylib` files are missing.
-
----
-
-## Web UI (`app.py`)
-
-Flask application that wraps the pipeline in an interactive browser UI. Single-job model — one analysis runs at a time; all state is stored in a module-level `_job` dict protected by a threading lock.
-
-### API surface
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `POST` | `/api/analyze` | Trigger analysis (body: `{project, output_dir}`) |
-| `GET`  | `/api/status` | Poll job state, phase statuses, summary, results |
-| `GET`  | `/api/log?offset=N` | Stream log lines since offset N |
-| `POST` | `/api/reset` | Clear results, return to idle |
-| `GET`  | `/api/artifacts` | All four pipeline JSON artifacts |
-| `GET`  | `/api/source?file=<path>` | Serve source file (sandboxed to project root) |
-| `GET`  | `/api/callgraph` | Build simplified call graph from Phase 3 data |
-| `GET`  | `/api/demo_path` | Return default demo project path |
-
-### Request flow
-
-```mermaid
-sequenceDiagram
-    participant Browser
-    participant app.py
-    participant pipeline.py
-    participant LLVM Tools
-
-    Browser->>app.py: POST /api/analyze
-    app.py->>app.py: spawn background thread
-    app.py-->>Browser: 200 {ok: true}
-
-    loop every ~1 s
-        Browser->>app.py: GET /api/status
-        app.py-->>Browser: {status, phase_statuses, log_count}
-        Browser->>app.py: GET /api/log?offset=N
-        app.py-->>Browser: {lines: [...]}
-    end
-
-    pipeline.py->>LLVM Tools: clang++, opt, llvm-link
-    LLVM Tools-->>pipeline.py: artifacts
-
-    app.py->>app.py: _job status = "done"
-    Browser->>app.py: GET /api/artifacts
-    app.py-->>Browser: {build_config_map, ast_mapping, reachability, dead_features}
-    Browser->>app.py: GET /api/callgraph
-    app.py-->>Browser: {nodes, edges, entry_points}
-```
-
-### Launch
-
-```bash
-pip install flask
-python3 app.py                          # http://localhost:5001
-
-# Pre-load results from a completed pipeline run
-python3 app.py --output-dir tests/artifacts/pipeline-out --project tests/dummy_project
-
-python3 app.py --port 8080 --no-browser
-```
-
----
-
-## Frontend (`templates/index.html`)
-
-Seven-slide interactive deck built with vanilla JS + D3.js (v7) + marked.js.
-
-| Slide | Label | Contents |
-|-------|-------|----------|
-| 1 | The Approach | Pipeline overview: why four phases are needed |
-| 2 | Run Analysis | Project path input, Analyze button, per-phase progress bars, real-time log stream |
-| 3 | Phase 01 · Build System | Phase 1 artifact viewer — targets, defines, files |
-| 4 | Phase 02 · Source Analysis | `ast_mapping.json` viewer — macro → line ranges, source highlighter |
-| 5 | Phase 03 · LLVM IR | `reachability.json` viewer — reachable functions, D3 call graph with BFS animation |
-| 6 | Phase 04 · Correlator | Dead feature table (macro, file, lines, confidence, LoC removable) |
-| 7 | Results | Full Markdown report rendered inline, JSON export button |
-
-### Call graph visualization
+### Confidence classification
 
 ```mermaid
 flowchart LR
-    A[/api/callgraph] -->|nodes + edges| B[D3 force simulation]
-    B --> C{node type}
-    C -->|user function| D[colored by reachability]
-    C -->|stdlib group| E[grouped stdlib node]
-    D --> F[click → source viewer\nhighlights dead lines]
-    B --> G[▶ Animate BFS button\nstep-by-step traversal]
+    A["#ifdef block\nin ast_mapping.json"] --> B{"Macro defined\nin ALL per-file\nbuild configs?"}
+    B -->|yes| SKIP["skip — always compiled\nnot dead"]
+    B -->|no| C{"Any line in block\nin reachable_lines\nfor this file?"}
+    C -->|"yes (some config)"| MED["MEDIUM\nCompiled but never\nreached in IR"]
+    C -->|"no (all configs)"| HIGH["HIGH\nNever compiled\nin any config"]
+```
+
+### Why not simpler alternatives?
+
+| Approach | Miss rate | False-positive rate | LoC counts |
+|----------|-----------|--------------------|-----------:|
+| grep CMakeLists.txt | High (per-target blindness) | Medium (2/7 on PulsarNet) | ✗ |
+| Phase 1 only (CMake-only) | Low | None | ✗ |
+| clang-tidy unused-macros | Very high (`#ifdef` invisible to it) | Unknown | ✗ |
+| cppcheck | High (no build-config awareness) | Medium | ✗ |
+| **Our 4-phase tool** | **None (on tested cases)** | **None** | **✅** |
+
+---
+
+## Implementation
+
+> Full LLVM/Clang internals: **[IMPLEMENTATION.md](IMPLEMENTATION.md)**
+
+### Phase 2 — PPCallbacks stack machine
+
+The preprocessor plugin tracks open `#ifdef` blocks using a stack. System-header blocks push a sentinel to keep the stack aligned without emitting output.
+
+```mermaid
+stateDiagram-v2
+    direction LR
+    [*] --> Idle
+
+    Idle --> Open : Ifdef / Ifndef / If\n(user code)
+    Idle --> Sentinel : Ifdef / Ifndef / If\n(system header)
+
+    Open --> Open : nested Ifdef (push)
+    Open --> Branch : Elif / Else\n(update branch end_line)
+    Branch --> Branch : Elif\n(new branch arm)
+    Branch --> Record : Endif\n(pop → emit to file map)
+    Open --> Record : Endif\n(no else arm)
+
+    Sentinel --> Idle : Endif\n(pop sentinel, no emit)
+    Record --> Idle : [stack empty]
+    Record --> Open : [parent block still open]
+```
+
+### Phase 3 — BFS reachability pass
+
+```mermaid
+flowchart TD
+    A["whole_program.bc\n(LTO IR with -g debug info)"] --> B
+
+    subgraph BFS["BFS Reachability — DeadFeaturePass.so"]
+        B["Seed set:\nmain + ExternalLinkage non-decls"] --> C["Visit function\nmark reachable"]
+        C --> D{"Instruction\ntype?"}
+        D -->|"CallBase with\ngetCalledFunction()"| E["Enqueue\ncallee"]
+        D -->|"Indirect call\n(fn pointer / vtable)"| F["Set\nhasIndirectCall"]
+        D -->|"Other"| G["Extract DILocation\n→ reachable_lines[file].add(line)"]
+        E --> C
+        F --> H{"All reachable\nfunctions visited?"}
+        H -->|yes| I["Add all\naddress-taken fns\nto queue"]
+        I --> C
+        H -->|no| C
+    end
+
+    G --> J["reachability.json\n{file → [line numbers]}"]
+```
+
+### Phase 4 — Per-file config filtering (critical detail)
+
+```mermaid
+flowchart LR
+    A["build_config_map.json"] --> B["build_file_config_sets()\nfile → only targets\nthat compile it"]
+    B --> C{"#ifdef MACRO\nin target defines?"}
+    C -->|"defined in ALL\nper-file targets"| SKIP["skip"]
+    C -->|"absent from\nsome/all targets"| D["check\nreachability.json"]
+    D -->|"lines reachable\nin some config"| MED["MEDIUM"]
+    D -->|"no lines reachable\nin any config"| HIGH["HIGH + LoC count"]
+```
+
+> **Why per-file matters:** a target that doesn't define `ENABLE_RDMA` but *also* doesn't compile `rdma.cpp` must not mask a HIGH finding in that file. Using all targets globally would introduce false negatives.
+
+---
+
+## Evaluation
+
+> Full metrics, 3-way baseline comparison, 30 annotated test cases: **[EVALUATION.md](EVALUATION.md)**
+
+### Baseline comparison
+
+Three approaches compared on the PulsarNet demo project (7 known dead blocks):
+
+```mermaid
+xychart-beta
+    title "Dead Block Detection on PulsarNet (7 known dead)"
+    x-axis ["Naive grep", "CMake-only (P1)", "Full 4-phase"]
+    y-axis "Count" 0 --> 9
+    bar [5, 7, 7]
+    line [2, 0, 0]
+```
+
+> Blue bars = true positives found. Orange line = false positives.
+
+Run the baseline comparison yourself:
+
+```bash
+# Run full pipeline first
+NO_UI=1 bash run.sh tests/demo_project
+
+# Then compare all three approaches
+python3 baseline/baseline_compare.py \
+    --project    tests/demo_project \
+    --tool-out   tests/artifacts/pipeline-out/dead_features.json \
+    --config-map tests/artifacts/pipeline-out/build_config_map.json \
+    --verbose
+```
+
+### Test cases (30 total)
+
+| ID | Scenario | Pattern | Expected |
+|----|----------|---------|----------|
+| TC01 | `tc01_never_defined` | Prototype macro, zero cmake refs | 1 HIGH |
+| TC02 | `tc02_else_branch_dead` | `#else` of always-ON macro | 1 HIGH |
+| TC03 | `tc03_always_off_flag` | cmake option never wired to target | 1 HIGH |
+| TC04 | `tc04_nested_dead` | Outer dead → nested blocks also dead | 3 HIGH |
+| TC05 | `tc05_all_live` | All macros defined — control test | **0** |
+| TC06 | `tc06_platform_guard` | WINDOWS_PLATFORM on Unix project | 1 HIGH |
+| TC07 | `tc07_cuda_backend` | ENABLE_CUDA, no GPU hardware | 1 HIGH |
+| TC08 | `tc08_deprecated_api` | DEPRECATED_V1_API, V1 removed | 1 HIGH |
+| TC09 | `tc09_legacy_serializer` | LEGACY_BINARY_FORMAT replaced by JSON | 1 HIGH |
+| TC10 | `tc10_mobile_build` | MOBILE_BUILD on desktop project | 1 HIGH |
+| TC11 | `tc11_telemetry_off` | ENABLE_TELEMETRY option OFF, not wired | 1 HIGH |
+| TC12 | `tc12_hotpatch_off` | ENABLE_HOT_PATCH option OFF | 1 HIGH |
+| TC13 | `tc13_orm_disabled` | ENABLE_ORM option OFF | 1 HIGH |
+| TC14 | `tc14_ipv6_disabled` | ENABLE_IPV6 option OFF | 1 HIGH |
+| TC15 | `tc15_avx512_disabled` | ENABLE_AVX512 option OFF | 1 HIGH |
+| TC16 | `tc16_debug_branch_dead` | RELEASE_BUILD always ON → debug `#else` dead | 1 HIGH |
+| TC17 | `tc17_insecure_path_dead` | SECURITY_HARDENED always ON → insecure `#else` | 1 HIGH |
+| TC18 | `tc18_old_protocol_dead` | PROTOCOL_V2 always ON → v1 `#else` dead | 1 HIGH |
+| TC19 | `tc19_bounds_check_dead` | BOUNDS_CHECKING always ON → fast `#else` dead | 1 HIGH |
+| TC20 | `tc20_unicode_ascii_dead` | UNICODE_SUPPORT always ON → ASCII `#else` dead | 1 HIGH |
+| TC21 | `tc21_triple_nested` | EXPERIMENTAL → GPU → TENSOR (3-level) | 3 HIGH |
+| TC22 | `tc22_offline_nested` | OFFLINE\_MODE → CACHE → COMPRESS (3-level) | 3 HIGH |
+| TC23 | `tc23_elif_chain` | `#elif` arms with undefined macros | 2 HIGH |
+| TC24 | `tc24_large_positive` | 8 macros all defined — large control test | **0** |
+| TC25 | `tc25_mixed_live_dead` | Same file: 2 live + 2 dead blocks | 2 HIGH |
+| TC26 | `tc26_multi_target_partial` | Shared file, SERVER_PUSH only in server target | 1 HIGH |
+| TC27 | `tc27_ifndef_pattern` | `#ifndef ALWAYS_DEFINED` → block dead | 1 HIGH |
+| TC28 | `tc28_vendor_extension` | VENDOR_ACME_SDK replaced by OSS | 1 HIGH |
+| TC29 | `tc29_regression_guard` | REGRESSION_TESTS + INTERNAL_TESTING both dead | 2 HIGH |
+| TC30 | `tc30_complex_interactions` | TLS+METRICS live, RDMA+ZERO_COPY dead, pool `#else` dead | 3 HIGH |
+
+Run any test case:
+
+```bash
+bash run.sh testcases/tc04_nested_dead
+```
+
+Run all test cases and compare against baseline:
+
+```bash
+for tc in testcases/tc*/; do
+    echo "=== $tc ==="
+    NO_UI=1 bash run.sh "$tc" /tmp/dfd-tc-out 2>&1 | tail -5
+    python3 baseline/baseline_compare.py \
+        --project "$tc" \
+        --tool-out /tmp/dfd-tc-out/dead_features.json \
+        --config-map /tmp/dfd-tc-out/build_config_map.json
+done
 ```
 
 ---
@@ -476,15 +286,12 @@ flowchart LR
 | Tool | Required for | Install |
 |------|-------------|---------|
 | Python 3.8+ | All phases | System |
-| Flask | Web UI | `pip install flask` or `bash run.sh` (auto-installs) |
+| Flask | Web UI | auto-installed by `run.sh` |
 | CMake 3.16+ | Phase 1 | `brew install cmake` |
-| Ninja | Phase 1 (optional, preferred) | `brew install ninja` |
+| Ninja | Phase 1 (optional) | `brew install ninja` |
 | LLVM 17+ (Homebrew) | Phases 2–3 | `brew install llvm` |
-| clang / clang++ | Phases 2–3 | Included with LLVM |
 
-> **Apple Clang** (from Xcode Command Line Tools) does **not** ship LLVM
-> development headers. Phases 2 and 3 require the full Homebrew LLVM package.
-> After install, `llvm-config` is at `/opt/homebrew/opt/llvm/bin/llvm-config`.
+> **Apple Clang** (Xcode CLT) does not ship LLVM dev headers. Phases 2 and 3 require Homebrew LLVM. After install: `/opt/homebrew/opt/llvm/bin/llvm-config`.
 
 ---
 
@@ -495,58 +302,50 @@ CDEL/
 ├── extractor/
 │   └── extractor.py              # Phase 1: CMake define extractor
 ├── llvm-pass/
-│   ├── README.md
-│   ├── IfdefMapper/              # Phase 2: Clang PPCallbacks plugin
+│   ├── IfdefMapper/              # Phase 2: Clang PPCallbacks plugin (C++17)
 │   │   ├── IfdefMapper.cpp
 │   │   ├── CMakeLists.txt
 │   │   └── build.sh
-│   └── DeadFeaturePass/          # Phase 3: LLVM new-PM Module pass
+│   └── DeadFeaturePass/          # Phase 3: LLVM new-PM Module pass (C++17)
 │       ├── DeadFeaturePass.cpp
 │       ├── CMakeLists.txt
 │       └── build.sh
 ├── templates/
-│   └── index.html                # 7-slide interactive web frontend
+│   └── index.html                # 7-slide interactive web frontend (D3.js + marked.js)
 ├── tests/
-│   ├── dummy_project/            # Minimal CMake project with #ifdef guards
-│   │   ├── CMakeLists.txt
-│   │   └── src/
-│   │       ├── main.cpp
-│   │       ├── feature.cpp
-│   │       └── feature.h
+│   ├── dummy_project/            # Minimal CMake project: 2 targets, EXPERIMENTAL + LEGACY
+│   ├── demo_project/             # PulsarNet: 3 targets, 7 intentional dead blocks
 │   ├── run_phase1_test.sh
 │   ├── run_phase2_test.sh
 │   ├── run_phase3_test.sh
 │   └── run_phase4_test.sh
-├── correlator.py                 # Phase 4: join + report
+├── testcases/                    # 30 labelled test cases (see EVALUATION.md)
+│   ├── tc01_never_defined/ … tc30_complex_interactions/
+│   └── README.md
+├── baseline/
+│   └── baseline_compare.py       # Runnable 3-way baseline comparison script
+├── correlator.py                 # Phase 4: 3-source join + Markdown/JSON report
 ├── pipeline.py                   # Orchestrator: DeadFeaturePipeline class
 ├── app.py                        # Flask web UI + REST API
+├── build.sh                      # Build LLVM plugins (IfdefMapper + DeadFeaturePass)
 ├── run.sh                        # One-shot: pipeline → web UI
 ├── requirements.txt              # Flask
-└── CLAUDE.md
+├── DESIGN.md                     # Approach rationale and alternatives
+├── IMPLEMENTATION.md             # LLVM/Clang plugin internals
+└── EVALUATION.md                 # Metrics, baseline comparison, 30 test cases
 ```
 
 ---
 
 ## Output Artifacts
 
-All artifacts are gitignored and written to the configured `output_dir` (default `tests/artifacts/pipeline-out/`).
+All artifacts are gitignored and written to `output_dir` (default `tests/artifacts/pipeline-out/`).
 
-| File | Produced by |
-|------|------------|
-| `build_config_map.json` | Phase 1 |
-| `ast_mapping.json` | Phase 2 |
-| `reachability.json` | Phase 3 |
-| `dead_features.json` | Phase 4 |
-| `report.md` | Phase 4 |
-| `ir/` | Phase 3 (per-TU `.bc` + `whole_program.bc`) |
-
----
-
-## Key Design Decisions
-
-- **Fake compiler fallback** (Phase 1): allows define extraction without a toolchain — important for CI or cross-compilation analysis environments.
-- **Hybrid AST+IR approach** (Phases 2+3): LLVM IR strips `#ifdef`s, so source-level macro locations (Phase 2) must be correlated with IR basic-block debug info (Phase 3) via line numbers.
-- **LTO IR** (Phase 3): whole-program IR via `llvm-link` is required for cross-TU call graph completeness.
-- **Per-file config filtering** (Phase 4): each source file is matched to only the build targets that actually compile it, preventing false negatives from targets that don't compile that file.
-- **`llvm-config` discovery**: all CMakeLists.txt use `find_package(LLVM REQUIRED CONFIG)` driven by `llvm-config --cmakedir` to avoid hardcoded paths.
-- **Single-job web model**: one analysis runs at a time; the frontend polls `/api/status` + `/api/log` and updates in real time without websockets.
+| File | Produced by | Contents |
+|------|------------|---------|
+| `build_config_map.json` | Phase 1 | target → defines + files |
+| `ast_mapping.json` | Phase 2 | `#ifdef` block → file, line range, macro |
+| `reachability.json` | Phase 3 | reachable line numbers per file |
+| `dead_features.json` | Phase 4 | dead blocks with confidence + LoC |
+| `report.md` | Phase 4 | human-readable Markdown report |
+| `ir/` | Phase 3 | per-TU `.bc` + `whole_program.bc` |

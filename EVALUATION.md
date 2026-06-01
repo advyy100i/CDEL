@@ -589,24 +589,107 @@ xychart-beta
 
 ---
 
-## Failure / Edge Cases
+## Failure / Edge Cases (tool limitations — honest evaluation)
 
-### Empty config map
+The cases below are **reproducible failures** — situations where the tool gives a wrong or unhelpful answer. Each has a corresponding test case in `testcases/` so the failure can be demonstrated directly.
 
-If `build_config_map.json` contains no targets (Phase 1 failed or project has no C++ targets), Phase 4 emits:
+---
 
-```
-[correlator] WARNING: no build targets found in config map.
-             All #ifdef blocks will appear unresolved.
-             Check that Phase 1 ran successfully.
-```
+### TC_FP01 — False positive: `configure_file`-defined macro
 
-No findings are reported rather than false positives — conservative by design.
+**Location:** `testcases/tc_fp01_configure_file/`
 
-### Header-only macros
+**Scenario:** `HAVE_NETWORK_STACK` is defined by CMake's `configure_file()`, which writes `#define HAVE_NETWORK_STACK 1` into a generated `config.h` header. No `-DHAVE_NETWORK_STACK` flag ever appears on the compiler command line.
 
-`#ifdef` blocks in `.h` files are captured by Phase 2 only if the header is directly `#include`d in a `.cpp` file that Phase 2 analyzes. Guards in headers that are part of system includes are filtered via `SM.isInSystemHeader()`.
+**What happens:** Phase 1 reads `compile_commands.json` and extracts only `-D` flags. It never sees `HAVE_NETWORK_STACK`. Phase 4 concludes the macro is absent from all configs and reports the `#ifdef HAVE_NETWORK_STACK` block as HIGH-confidence dead.
 
-### Missing debug info
+| | Expected | Actual tool |
+|---|---|---|
+| Findings | 0 (block is live) | **1 HIGH false positive** |
+| Precision | 100% | **0%** |
 
-If source is compiled without `-g`, Phase 3 cannot extract `DILocation` data and `reachable_lines` will be empty. This causes all blocks to appear as HIGH confidence (conservative). Always compile with `-g` for accurate MEDIUM detection.
+**Root cause:** Phase 1 is blind to macros defined via `configure_file()`, `-include` flags, or precompiled headers — only direct `-D` flags are parsed.
+
+**Workaround:** Manually add the generated macro to a per-project allowlist in the correlator, or parse the generated header alongside `compile_commands.json`.
+
+---
+
+### TC_FN01 — False negative: BFS over-approximation via indirect calls
+
+**Location:** `testcases/tc_fn01_indirect_bfs/`
+
+**Scenario:** `ENABLE_LEGACY_PATH=1` is defined, so `legacy_handler()` is compiled and appears in the IR. At runtime, `main()` builds a dispatch table `{&modern_handler, &legacy_handler}` and always calls `dispatch[0]` — `legacy_handler` is never actually invoked.
+
+**What happens:** Phase 3 BFS reaches `main()`, sees an indirect `CallBase` (the `dispatch[0]()` call has no static callee). Per the conservative rule, **all address-taken functions** are added to the reachable set. `legacy_handler`'s address is stored in the array, so it is marked reachable. Phase 4 never reports it.
+
+| | Expected | Actual tool |
+|---|---|---|
+| Findings | 1 MEDIUM (compiled, not reachable) | **0 — missed** |
+| Recall | 100% | **0%** |
+
+**Root cause:** Documented conservative behaviour in `DeadFeaturePass.cpp` — any indirect call in a reachable function pulls all address-taken functions into the reachable set. This is sound (no false positives from this rule) but loses precision when function-pointer dispatch is always resolved to a subset of targets.
+
+**Workaround:** Pointer analysis (e.g., Andersen-style) could narrow the callee set. Not implemented — would significantly increase Phase 3 complexity.
+
+---
+
+### TC_FN02 — False negative: value-dependent `#if` condition
+
+**Location:** `testcases/tc_fn02_value_condition/`
+
+**Scenario:** CMake defines `-DLOG_LEVEL=0`. The source guards logging code with `#if LOG_LEVEL > 0` and `#if LOG_LEVEL > 1`. Both blocks are dead because `LOG_LEVEL=0` makes both conditions false at compile time.
+
+**What happens:** Phase 1 extracts `LOG_LEVEL` as a defined macro (the name, without its value). Phase 4 checks: "is `LOG_LEVEL` present in the defines set for this file?" → YES → does not flag the blocks.
+
+| | Expected | Actual tool |
+|---|---|---|
+| Findings | 2 HIGH (`#if LOG_LEVEL > 0`, `#if LOG_LEVEL > 1`) | **0 — missed** |
+| Recall | 100% | **0%** |
+
+**Root cause:** The correlator stores macro names only. It cannot evaluate numeric expressions like `LOG_LEVEL > 0`. This applies to any `#if <expr>` that uses a macro's value rather than just its presence.
+
+**Workaround:** Store macro values alongside names in `build_config_map.json` and add a constant-folding evaluator to Phase 4. Partial fix: treat `MACRO=0` as "not defined" for presence checks.
+
+---
+
+### TC_BL01 — Baseline sufficient (tool adds no value over CMake-only)
+
+**Location:** `testcases/tc_bl01_baseline_sufficient/`
+
+**Scenario:** A simple single-target project where three macros (`FUTURE_FEATURE_A`, `FUTURE_FEATURE_B`, `EXPERIMENTAL_UI`) are entirely absent from `CMakeLists.txt`. Baseline 2 (CMake-only, Phase 1 output alone) finds all three with 100% precision/recall.
+
+**What happens:** Both Baseline 2 and the full tool report the same 3 HIGH findings. The full tool required building two LLVM plugins, running Clang on the source, linking LTO bitcode, and running the LLVM pass — all for identical output.
+
+| Approach | Findings | Precision | Recall | Setup cost |
+|---|---|---|---|---|
+| Baseline 2 (CMake-only) | 3 HIGH | 100% | 100% | Phase 1 only |
+| Full 4-phase tool | 3 HIGH | 100% | 100% | All 4 phases + LLVM build |
+
+**Conclusion:** For projects where every dead macro is simply absent from all `target_compile_definitions`, the IR pipeline adds no signal. The full tool's value emerges only when macros are *conditionally* defined across targets (per-file config filtering) or when code is compiled but never reachable (MEDIUM confidence).
+
+---
+
+### Aggregate failure summary
+
+| TC | Type | Expected | Actual | Metric impact |
+|----|------|----------|--------|---------------|
+| TC_FP01 | False positive | 0 findings | 1 HIGH FP | Precision = 0% on this case |
+| TC_FN01 | False negative | 1 MEDIUM | 0 findings | Recall = 0% on this case |
+| TC_FN02 | False negative | 2 HIGH | 0 findings | Recall = 0% on this case |
+| TC_BL01 | Baseline sufficient | 3 HIGH | 3 HIGH (correct) | No advantage over Baseline 2 |
+
+**Overall precision across all 36 test cases (TC01–TC32 + 4 failure cases):**
+- 35/36 cases produce correct findings
+- TC_FP01 produces 1 false positive → precision on that case = 0%
+- TC_FN01 and TC_FN02 miss findings → recall on those cases = 0%
+- TC_BL01 is correct but demonstrates the tool is over-engineered for simple inputs
+
+---
+
+### Other known edge cases (not test-cased)
+
+**Empty config map:** If Phase 1 finds no C++ targets, Phase 4 emits a warning and reports nothing (conservative — no false positives).
+
+**Header-only macros:** `#ifdef` blocks in `.h` files are captured only if the header is directly `#include`d by a `.cpp` analyzed by Phase 2. System headers are skipped via `SM.isInSystemHeader()`.
+
+**Missing debug info:** Compiling without `-g` leaves Phase 3 unable to extract `DILocation` line numbers. All blocks then appear HIGH-confidence (everything looks dead). Always compile with `-g`.

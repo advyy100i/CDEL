@@ -229,6 +229,13 @@ def api_known_projects():
         if (p / "CMakeLists.txt").exists():
             projects.append({"label": label, "path": str(p)})
 
+    # Scan testcases/ directory
+    testcases_dir = REPO_ROOT / "testcases"
+    if testcases_dir.is_dir():
+        for tc in sorted(testcases_dir.iterdir()):
+            if tc.is_dir() and (tc / "CMakeLists.txt").exists():
+                projects.append({"label": tc.name, "path": str(tc)})
+
     # Scan one level above REPO_ROOT for sibling CMake projects
     parent = REPO_ROOT.parent
     try:

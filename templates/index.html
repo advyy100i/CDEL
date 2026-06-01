@@ -751,9 +751,9 @@ details > summary:hover { color: var(--t2); }
                 <option value="" disabled selected>Loading projects…</option>
               </select>
             </div>
-            <div id="custom-path-wrap" class="path-custom-wrap">
+            <div id="custom-path-wrap" class="path-custom-wrap visible">
               <input id="project-path" class="inp" type="text"
-                placeholder="Absolute path to your CMake project…"
+                placeholder="Or enter a custom path…"
                 autocomplete="off" spellcheck="false"/>
             </div>
           </div>
@@ -1196,6 +1196,17 @@ function go(n) {
       // Incoming slide enters center
       inn.classList.remove('is-left');
       inn.classList.add('is-active');
+
+      // Rebuild call graph after slide finishes animating in (420ms transition)
+      if (n === 4 && S.cgData) {
+        setTimeout(() => {
+          const container = $i('p3-content');
+          if (container && container.clientWidth > 0) {
+            container.querySelector('.cg-outer')?.remove();
+            buildCallGraph(container, S.cgData);
+          }
+        }, 450);
+      }
     });
   });
 }
@@ -1442,7 +1453,7 @@ function annotateDeadLines(deadFeatures) {
 // ── Call graph (Phase 3) ──────────────────────────────────────────────────────
 function buildCallGraph(container, cgData) {
   S.cgData = cgData;
-  const W = container.clientWidth || 660, H = 290;
+  const W = Math.max(container.clientWidth, 660), H = 360;
 
   const html = `
     <div class="cg-outer">
@@ -1519,19 +1530,25 @@ function buildCallGraph(container, cgData) {
     .attr('font-size',7).attr('fill','var(--violet)')
     .text('ENTRY');
 
+  const PAD = 50;
   const sim = d3.forceSimulation(cgData.nodes)
-    .force('link',      d3.forceLink(links).id(d=>d.id).distance(140))
-    .force('charge',    d3.forceManyBody().strength(-280))
+    .force('link',      d3.forceLink(links).id(d=>d.id).distance(120))
+    .force('charge',    d3.forceManyBody().strength(-220))
     .force('center',    d3.forceCenter(W/2, H/2))
-    .force('collision', d3.forceCollide().radius(50))
+    .force('x',         d3.forceX(W/2).strength(0.06))
+    .force('y',         d3.forceY(H/2).strength(0.06))
+    .force('collision', d3.forceCollide().radius(45))
     .on('tick', () => {
+      cgData.nodes.forEach(d => {
+        d.x = Math.max(PAD, Math.min(W - PAD, d.x));
+        d.y = Math.max(PAD, Math.min(H - PAD, d.y));
+      });
       linkEls.attr('d', d => {
         const dx = d.target.x - d.source.x, dy = d.target.y - d.source.y;
         const dr = Math.sqrt(dx*dx+dy*dy)*1.5;
         return `M${d.source.x},${d.source.y}A${dr},${dr} 0 0,1 ${d.target.x},${d.target.y}`;
       });
-      nodeG.attr('transform', d =>
-        `translate(${Math.max(40,Math.min(W-40,d.x))},${Math.max(40,Math.min(H-40,d.y))})`);
+      nodeG.attr('transform', d => `translate(${d.x},${d.y})`);
     });
 
   S.cgNodeEls = nodeG;
@@ -1901,38 +1918,21 @@ async function loadKnownProjects() {
         sel.appendChild(opt);
       });
     }
-    // Add custom path option at the bottom
-    const sep = document.createElement('option');
-    sep.disabled = true;
-    sep.textContent = '──────────────────────────';
-    sel.appendChild(sep);
-    const custom = document.createElement('option');
-    custom.value = '__custom__';
-    custom.textContent = 'Enter custom path…';
-    sel.appendChild(custom);
 
     onPathSelect();
   } catch(e) {
-    sel.innerHTML = '<option value="__custom__">Enter custom path…</option>';
-    onPathSelect();
+    sel.innerHTML = '<option value="" disabled selected>Could not load projects</option>';
   }
 }
 
 function onPathSelect() {
   const sel = $i('project-select');
-  const wrap = $i('custom-path-wrap');
-  if (sel.value === '__custom__') {
-    wrap.classList.add('visible');
-    $i('project-path').focus();
-  } else {
-    wrap.classList.remove('visible');
-    // Immediately load any cached results for this project
-    loadProjectArtifacts(sel.value);
-  }
+  $i('project-path').value = '';
+  if (sel.value) loadProjectArtifacts(sel.value);
 }
 
 async function loadProjectArtifacts(projectPath) {
-  if (!projectPath || projectPath === '__custom__') return;
+  if (!projectPath) return;
   const qs = '?project=' + encodeURIComponent(projectPath);
   try {
     const [arts, rep] = await Promise.all([
@@ -1983,18 +1983,15 @@ function clearSlideContent() {
 }
 
 function getSelectedPath() {
-  const sel = $i('project-select');
-  if (sel.value === '__custom__') {
-    return $i('project-path').value.trim();
-  }
-  return sel.value.trim();
+  const custom = $i('project-path').value.trim();
+  if (custom) return custom;
+  return $i('project-select').value.trim();
 }
 
 async function useDemo() {
-  // Select first non-custom option (the built-in demo)
   const sel = $i('project-select');
   for (const opt of sel.options) {
-    if (opt.value && opt.value !== '__custom__' && !opt.disabled) {
+    if (opt.value && !opt.disabled) {
       sel.value = opt.value;
       onPathSelect();
       break;
@@ -2036,7 +2033,7 @@ function copyJSON() {
   try {
     const st = await fetch('/api/status').then(r => r.json());
 
-    // Sync the dropdown to whatever project was last active
+    // Sync to whatever project was last active
     if (st.project) {
       const sel = $i('project-select');
       let matched = false;
@@ -2044,10 +2041,7 @@ function copyJSON() {
         if (opt.value === st.project) { sel.value = st.project; matched = true; break; }
       }
       if (!matched) {
-        sel.value = '__custom__';
         $i('project-path').value = st.project;
-        // Don't call onPathSelect here — we handle data load below
-        $i('custom-path-wrap').classList.add('visible');
       }
     }
 

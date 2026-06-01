@@ -9,7 +9,7 @@ Run these to demonstrate the limitations honestly.
 
 ```bash
 # Phase 1 only (needed for all cases)
-cd /path/to/CDEL
+cd "$(git rev-parse --show-toplevel)"  # run from repo root
 
 # Full pipeline (needed for TC_FN01)
 # Requires Homebrew LLVM: brew install llvm

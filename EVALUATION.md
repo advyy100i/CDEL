@@ -61,6 +61,10 @@ xychart-beta
 **Why Phase 1 finds MEDIUM cases that grep misses:**  
 One MEDIUM-confidence block (a function that is compiled with `ENABLE_TLS` but whose call path is never exercised by the server or client entry points) is invisible to grep and Phase 1 but caught by the Phase 3 IR pass.
 
+### Baseline comparison output
+
+![Baseline comparison — precision/recall/F1 table](screenshots/07_baseline_comparison.png)
+
 ### Running the comparison yourself
 
 ```bash
@@ -612,6 +616,8 @@ The cases below are **reproducible failures** — situations where the tool give
 
 **Workaround:** Manually add the generated macro to a per-project allowlist in the correlator, or parse the generated header alongside `compile_commands.json`.
 
+![TC_FP01 — Phase 1 returns empty defines for configure_file project](screenshots/05_failure_fp01.png)
+
 ---
 
 ### TC_FN01 — False negative: BFS over-approximation via indirect calls
@@ -649,6 +655,8 @@ The cases below are **reproducible failures** — situations where the tool give
 **Root cause:** The correlator stores macro names only. It cannot evaluate numeric expressions like `LOG_LEVEL > 0`. This applies to any `#if <expr>` that uses a macro's value rather than just its presence.
 
 **Workaround:** Store macro values alongside names in `build_config_map.json` and add a constant-folding evaluator to Phase 4. Partial fix: treat `MACRO=0` as "not defined" for presence checks.
+
+![TC_FN02 — LOG_LEVEL name present but value 0 lost; both dead blocks missed](screenshots/06_failure_fn02.png)
 
 ---
 

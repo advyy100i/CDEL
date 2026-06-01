@@ -1,0 +1,11 @@
+# Drop screenshots here before pushing.
+#
+# Expected files (names must match README.md references):
+#
+#   01_ui_project_selector.png   — UI loaded, dropdown showing testcases list
+#   02_phase1_defines.png        — Phase 1 running, defines in output panel
+#   03_phase4_report.png         — Phase 4 complete, HIGH/MEDIUM findings shown
+#   04_callgraph.png             — Call graph slide, D3 nodes and edges rendered
+#   05_failure_fp01.png          — Terminal: tc_fp01_configure_file empty defines
+#   06_failure_fn02.png          — Terminal: tc_fn02_value_condition LOG_LEVEL stripped
+#   07_baseline_comparison.png   — Baseline comparison precision/recall/F1 table

@@ -237,11 +237,11 @@ def main():
         print('\n── Full tool findings ────────────────────────────────────────────────')
         for f in tool_findings:
             print(f"  [{f.get('confidence','?')}]  {f['macro']:<35}"
-                  f"  {Path(f['file']).name}:{f['start_line']}-{f['end_line']}"
-                  f"  ({f.get('loc_removable', '?')} LoC)")
+                  f"  {Path(f.get('source_file', f.get('file', '?'))).name}:{f['start_line']}-{f['end_line']}"
+                  f"  ({f.get('loc', f.get('loc_removable', '?'))} LoC)")
 
     # ── LoC summary ───────────────────────────────────────────────────────────
-    total_loc = sum(f.get('loc_removable', 0) for f in tool_findings if f.get('confidence') == 'HIGH')
+    total_loc = sum(f.get('loc', f.get('loc_removable', 0)) for f in tool_findings if f.get('confidence') == 'HIGH')
     print(f'\n  Full tool — total HIGH-confidence LoC removable: {total_loc}')
     print(f'  (Baselines 1 & 2 cannot report LoC counts — no line-range information)\n')
 

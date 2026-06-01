@@ -3,6 +3,8 @@ __pycache__/
 *.pyc
 tests/dummy_project/build-*/
 tests/artifacts/
+testcases/*/build-*/
+testcases/*/build/
 .history/
 CLAUDE.md
 .claude

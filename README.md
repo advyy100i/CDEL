@@ -10,6 +10,28 @@ A whole-program LLVM/Clang analysis tool that finds `#ifdef`-guarded code region
 
 ---
 
+## Screenshots
+
+### Working — full pipeline on PulsarNet demo project
+
+| Project selector + Phase 1 output | Phase 4 report with HIGH findings |
+|:---:|:---:|
+| ![UI project selector](screenshots/01_ui_project_selector.png) | ![Phase 4 dead feature report](screenshots/03_phase4_report.png) |
+
+| Call graph (D3.js force layout) | Baseline comparison metrics |
+|:---:|:---:|
+| ![Call graph slide](screenshots/04_callgraph.png) | ![Baseline comparison F1 table](screenshots/07_baseline_comparison.png) |
+
+### Failure / limitation cases (honest evaluation)
+
+| TC_FP01 — False positive (`configure_file` macro missed) | TC_FN02 — False negative (value-blind `#if LOG_LEVEL > 0`) |
+|:---:|:---:|
+| ![FP01 empty defines](screenshots/05_failure_fp01.png) | ![FN02 value stripped](screenshots/06_failure_fn02.png) |
+
+> Step-by-step commands to reproduce each failure: [`testcases/FAILURE_CASES.md`](testcases/FAILURE_CASES.md)
+
+---
+
 ## Documentation
 
 | Document | Contents |
@@ -76,6 +98,12 @@ NO_UI=1 bash run.sh /path/to/project
 # Custom LLVM installation
 LLVM_CONFIG=/opt/homebrew/opt/llvm/bin/llvm-config bash run.sh
 ```
+
+| Project selector | Phase 4 — dead feature report |
+|:---:|:---:|
+| ![UI project selector](screenshots/01_ui_project_selector.png) | ![Phase 4 report with HIGH findings](screenshots/03_phase4_report.png) |
+
+![Call graph (D3 force layout)](screenshots/04_callgraph.png)
 
 ---
 

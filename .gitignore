@@ -8,3 +8,9 @@ testcases/*/build/
 .history/
 CLAUDE.md
 .claude
+DeadFeatureDetector_Report.aux
+DeadFeatureDetector_Report.log
+DeadFeatureDetector_Report.out
+DeadFeatureDetector_Report.toc
+DeadFeatureDetector_Report.pdf
+DeadFeatureDetector_Report.tex

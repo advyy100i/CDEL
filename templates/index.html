@@ -1483,11 +1483,15 @@ function buildCallGraph(container, cgData) {
     .attr('fill', d => d === 'lit' ? 'var(--green)' : '#334155');
 
   const nodeById = new Map(cgData.nodes.map(d => [d.id, d]));
-  const links    = cgData.edges.map(e => ({
-    source: nodeById.get(e.source) || e.source,
-    target: nodeById.get(e.target) || e.target,
-    id: e.source + '→' + e.target,
-  }));
+  // Drop dangling edges: a link pointing at an id with no node makes
+  // d3.forceLink throw ("missing: <id>"), which would blank the whole graph.
+  const links    = cgData.edges
+    .filter(e => nodeById.has(e.source) && nodeById.has(e.target))
+    .map(e => ({
+      source: nodeById.get(e.source),
+      target: nodeById.get(e.target),
+      id: e.source + '→' + e.target,
+    }));
 
   const linkEls = svg.append('g').selectAll('path')
     .data(links).join('path')

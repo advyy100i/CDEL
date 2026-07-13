@@ -353,14 +353,9 @@ def api_callgraph():
                "is_group": False}
              for m, d in user_funcs.items()]
 
-    if stdlib_count:
-        nodes.append({"id": "__stdlib__", "name": "stdlib / STL",
-                      "subtitle": f"{stdlib_count} fns", "file": "system",
-                      "filepath": "", "lines": [], "reachable": True,
-                      "is_entry": False, "is_group": True})
-
     name_to_mangled = {_demangle_simple(m).split("(")[0]: m for m in user_funcs}
     edges: list = []
+    stdlib_edge = False
     for mangled, details in user_funcs.items():
         src_file   = details.get("source_file", "")
         func_lines = details.get("lines", [])
@@ -385,6 +380,18 @@ def api_callgraph():
                 if e not in edges:
                     edges.append(e)
                 added_stdlib = True
+                stdlib_edge = True
+
+    # Emit the stdlib/STL group node whenever it is referenced — either by
+    # functions classified as stdlib, or by a call-edge into __stdlib__.  An
+    # edge whose target node is absent makes d3.forceLink throw ("missing:
+    # __stdlib__"), which silently blanks the whole graph.
+    if stdlib_count or stdlib_edge:
+        subtitle = f"{stdlib_count} fns" if stdlib_count else "external"
+        nodes.append({"id": "__stdlib__", "name": "stdlib / STL",
+                      "subtitle": subtitle, "file": "system",
+                      "filepath": "", "lines": [], "reachable": True,
+                      "is_entry": False, "is_group": True})
 
     return jsonify({"nodes": nodes, "edges": edges, "entry_points": entry_points})
 
